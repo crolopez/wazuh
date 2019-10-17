@@ -1,9 +1,9 @@
 /*
  * Wazuh Module Manager
- * Copyright (C) 2016 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * April 27, 2016.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -38,13 +38,19 @@ int wm_config() {
         return -1;
     }
 
+
+
 #ifdef CLIENT
     // Read configuration: agent.conf
     agent_cfg = 1;
     ReadConfig(CWMODULE | CAGENT_CONFIG, AGENTCONFIG, &wmodules, &agent_cfg);
+#if defined (__linux__) || (__MACH__)
+    wmodule *module;
+    module = wm_control_read();
+    wm_add(module);
+#endif
 #else
     wmodule *module;
-
     // The database module won't be available on agents
 
     if ((module = wm_database_read()))
@@ -108,11 +114,12 @@ int wm_check() {
 
     // Get the last module of the same type
 
+#ifndef __clang_analyzer__
     for (i = wmodules->next; i; i = i->next) {
         for (j = prev = wmodules; j != i; j = next) {
             next = j->next;
 
-            if (!strcmp(i->tag, j->tag)) {
+            if (i->tag && j->tag && !strcmp(i->tag, j->tag)) {
 
                 mdebug1("Deleting repeated module '%s'.", j->tag);
 
@@ -128,6 +135,7 @@ int wm_check() {
             }
         }
     }
+#endif
 
     return 0;
 }
@@ -136,32 +144,6 @@ int wm_check() {
 
 void wm_destroy() {
     wm_free(wmodules);
-}
-
-// Concatenate strings with optional separator
-
-int wm_strcat(char **str1, const char *str2, char sep) {
-    size_t len1;
-    size_t len2;
-
-    if (str2) {
-        len2 = strlen(str2);
-
-        if (*str1) {
-            len1 = strlen(*str1);
-            os_realloc(*str1, len1 + len2 + (sep ? 2 : 1), *str1);
-
-            if (sep)
-                memcpy(*str1 + (len1++), &sep, 1);
-        } else {
-            len1 = 0;
-            os_malloc(len2 + 1, *str1);
-        }
-
-        memcpy(*str1 + len1, str2, len2 + 1);
-        return 0;
-    } else
-        return -1;
 }
 
 // Tokenize string separated by spaces, respecting double-quotes
@@ -230,6 +212,7 @@ int wm_state_io(const char * tag, int op, void *state, size_t size) {
     if (!(file = fopen(path, op == WM_IO_WRITE ? "wb" : "rb"))) {
         return -1;
     }
+    w_file_cloexec(file);
 
     nmemb = (op == WM_IO_WRITE) ? fwrite(state, size, 1, file) : fread(state, size, 1, file);
     fclose(file);
@@ -277,7 +260,7 @@ void wm_module_free(wmodule * config){
 }
 
 
-// Get readed data
+// Get read data
 cJSON *getModulesConfig(void) {
 
     wmodule *cur_module;
@@ -286,8 +269,13 @@ cJSON *getModulesConfig(void) {
     cJSON *wm_mod = cJSON_CreateArray();
 
     for (cur_module = wmodules; cur_module; cur_module = cur_module->next) {
-        if (cur_module->context->dump(cur_module->data))
-            cJSON_AddItemToArray(wm_mod,cur_module->context->dump(cur_module->data));
+        if (cur_module->context->dump) {
+            cJSON * item = cur_module->context->dump(cur_module->data);
+
+            if (item) {
+                cJSON_AddItemToArray(wm_mod, item);
+            }
+        }
     }
 
     cJSON_AddItemToObject(root,"wmodules",wm_mod);
@@ -617,3 +605,13 @@ void wm_delay(unsigned int ms) {
     select(0, NULL, NULL, NULL, &timeout);
 #endif
 }
+
+#ifdef __MACH__
+void freegate(gateway *gate){
+    if(!gate){
+        return;
+    }
+    os_free(gate->addr);
+    os_free(gate);
+}
+#endif

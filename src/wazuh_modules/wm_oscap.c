@@ -1,9 +1,9 @@
 /*
  * Wazuh Module for OpenSCAP
- * Copyright (C) 2016 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * April 25, 2016.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -20,7 +20,7 @@ cJSON *wm_oscap_dump(const wm_oscap *oscap);
 const wm_context WM_OSCAP_CONTEXT = {
     "open-scap",
     (wm_routine)wm_oscap_main,
-    (wm_routine)wm_oscap_destroy,
+    (wm_routine)(void *)wm_oscap_destroy,
     (cJSON * (*)(const void *))wm_oscap_dump
 };
 
@@ -54,9 +54,15 @@ void* wm_oscap_main(wm_oscap *oscap) {
     if (!oscap->flags.scan_on_start) {
         time_start = time(NULL);
 
+        // On first run, take into account the interval of time specified
+        if (oscap->state.next_time == 0) {
+            oscap->state.next_time = time_start + oscap->interval;
+        }
+
         if (oscap->state.next_time > time_start) {
             mtinfo(WM_OSCAP_LOGTAG, "Waiting for turn to evaluate.");
-            sleep(oscap->state.next_time - time_start);
+            time_sleep = oscap->state.next_time - time_start;
+            wm_delay(1000 * time_sleep);
         }
     }
 
@@ -89,7 +95,7 @@ void* wm_oscap_main(wm_oscap *oscap) {
             mterror(WM_OSCAP_LOGTAG, "Couldn't save running state.");
 
         // If time_sleep=0, yield CPU
-        sleep(time_sleep);
+        wm_delay(1000 * time_sleep);
     }
 
     return NULL;
@@ -114,7 +120,7 @@ void wm_oscap_setup(wm_oscap *_oscap) {
     // Connect to socket
 
     for (i = 0; (queue_fd = StartMQ(DEFAULTQPATH, WRITE)) < 0 && i < WM_MAX_ATTEMPTS; i++)
-        sleep(WM_MAX_WAIT);
+        wm_delay(1000 * WM_MAX_WAIT);
 
     if (i == WM_MAX_ATTEMPTS) {
         mterror(WM_OSCAP_LOGTAG, "Can't connect to queue.");
@@ -137,9 +143,6 @@ void wm_oscap_cleanup() {
 
 void wm_oscap_run(wm_oscap_eval *eval) {
     char *command = NULL;
-    int status;
-    char *output = NULL;
-    char *line;
     char *arg_profiles = NULL;
     char msg[OS_MAXSTR];
     wm_oscap_profile *profile;
@@ -160,18 +163,22 @@ void wm_oscap_run(wm_oscap_eval *eval) {
         break;
     default:
         mterror(WM_OSCAP_LOGTAG, "Unspecified content type for file '%s'. This shouldn't happen.", eval->path);
+        os_free(command);
         pthread_exit(NULL);
     }
 
     wm_strcat(&command, eval->path, ' ');
 
-    for (profile = eval->profiles; profile; profile = profile->next)
+    for (profile = eval->profiles; profile; profile = profile->next) {
         wm_strcat(&arg_profiles, profile->name, ',');
+    }
 
     if (arg_profiles) {
         wm_strcat(&command, "--profiles", ' ');
         wm_strcat(&command, arg_profiles, ' ');
     }
+
+    os_free(arg_profiles);
 
     if (eval->xccdf_id) {
         wm_strcat(&command, "--xccdf-id", ' ');
@@ -202,38 +209,50 @@ void wm_oscap_run(wm_oscap_eval *eval) {
 
     mtdebug1(WM_OSCAP_LOGTAG, "Launching command: %s", command);
 
+    int status;
+    char *output = NULL;
     switch (wm_exec(command, &output, &status, eval->timeout, NULL)) {
     case 0:
         if (status > 0) {
-            mtwarn(WM_OSCAP_LOGTAG, "Ignoring content '%s' due to error (%d).", eval->path, status);
-            mtdebug2(WM_OSCAP_LOGTAG, "OUTPUT: %s", output);
+            if (status != 2) {
+                mtwarn(WM_OSCAP_LOGTAG, "Ignoring content '%s' due to error (%d).", eval->path, status);
+                mtdebug2(WM_OSCAP_LOGTAG, "OUTPUT: %s", output);
+            } else {
+                mterror(WM_OSCAP_LOGTAG, "OUTPUT: %s", output);
+                os_free(command);
+                os_free(output);
+                pthread_exit(NULL);
+            }
             eval->flags.error = 1;
         }
 
         break;
 
     case WM_ERROR_TIMEOUT:
-        free(output);
+        os_free(output);
         output = NULL;
         wm_strcat(&output, "oscap: ERROR: Timeout expired.", '\0');
         mterror(WM_OSCAP_LOGTAG, "Timeout expired executing '%s'.", eval->path);
         break;
 
     default:
-        mterror(WM_OSCAP_LOGTAG, "Internal calling. Exiting...");
+        mterror(WM_OSCAP_LOGTAG, "Internal error. Exiting...");
+        os_free(command);
         pthread_exit(NULL);
     }
 
-    for (line = strtok(output, "\n"); line; line = strtok(NULL, "\n")){
+    os_free(command);
+
+    char *line;
+    char *save_ptr;
+    for (line = strtok_r(output, "\n", &save_ptr); line; line = strtok_r(NULL, "\n", &save_ptr)) {
         wm_sendmsg(usec, queue_fd, line, WM_OSCAP_LOCATION, LOCALFILE_MQ);
     }
 
+    os_free(output);
+
     snprintf(msg, OS_MAXSTR, "Ending OpenSCAP scan. File: %s. ", eval->path);
     wm_sendmsg(usec, queue_fd, msg, "rootcheck", ROOTCHECK_MQ);
-
-    free(output);
-    free(command);
-    free(arg_profiles);
 }
 
 // Check configuration
@@ -299,7 +318,7 @@ void* wm_oscap_main(__attribute__((unused)) wm_oscap *oscap) {
 #endif
 
 
-// Get readed data
+// Get read data
 
 cJSON *wm_oscap_dump(const wm_oscap *oscap) {
 

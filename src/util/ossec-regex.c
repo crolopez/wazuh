@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -84,8 +85,11 @@ int main(int argc, char **argv)
             printf("+OS_Match2      : %s\n", string);
         }
 
-        w_FreeArray(regex.d_sub_strings);
         free(string);
     }
+
+    OSRegex_FreePattern(&regex);
+    OSMatch_FreePattern(&matcher);
+
     return (0);
 }

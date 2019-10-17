@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -32,9 +33,7 @@ int main(int argc, char **argv)
     system("sc config OssecSvc start= auto");
 
     /* Change permissions */
-    checkVista();
-
-    if (isVista) {
+    if (checkVista()) {
         char cmd[OS_MAXSTR + 1];
 
         /* Copy some files to outside */

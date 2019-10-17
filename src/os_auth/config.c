@@ -1,9 +1,9 @@
 /*
  * Authd settings manager
- * Copyright (C) 2017 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * May 29, 2017.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -31,6 +31,14 @@ int authd_read_config(const char *path) {
 
     if (!config.ciphers) {
         config.ciphers = strdup(DEFAULT_CIPHERS);
+    }
+
+    switch (config.flags.disabled) {
+    case AD_CONF_UNPARSED:
+        config.flags.disabled = 1;
+        break;
+    case AD_CONF_UNDEFINED:
+        config.flags.disabled = 0;
     }
 
     config.timeout_sec = getDefine_Int("auth", "timeout_seconds", 0, INT_MAX);

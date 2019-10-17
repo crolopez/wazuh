@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -13,6 +14,8 @@
 #endif
 #include "os_crypto/md5/md5_op.h"
 #include "os_net/os_net.h"
+#include "wazuh_modules/wmodules.h"
+#include "wazuh_modules/wm_sca.h"
 #include "agentd.h"
 
 /* Global variables */
@@ -27,7 +30,6 @@ static const char * IGNORE_LIST[] = { SHAREDCFG_FILENAME, NULL };
 int receive_msg()
 {
     ssize_t recv_b;
-    uint32_t length;
     size_t msg_length;
     int reads = 0;
     static int undefined_msg_logged = 0;
@@ -40,46 +42,36 @@ int receive_msg()
 
     /* Read until no more messages are available */
     while (1) {
-        if (agt->server[agt->rip_id].protocol == TCP_PROTO) {
+        if (agt->server[agt->rip_id].protocol == IPPROTO_TCP) {
             /* Only one read per call */
             if (reads++) {
                 break;
             }
 
-            recv_b = recv(agt->sock, (char*)&length, sizeof(length), MSG_WAITALL);
-            length = wnet_order(length);
+            recv_b = OS_RecvSecureTCP(agt->sock, buffer, OS_MAXSTR);
 
             // Manager disconnected or error
 
-            switch (recv_b) {
-            case -1:
-                if (errno == ENOTCONN) {
-                    mdebug1("Manager disconnected (ENOTCONN).");
-                } else {
-                    merror("Connection socket: %s (%d)", strerror(errno), errno);
+            if (recv_b <= 0) {
+                switch (recv_b) {
+                case OS_SOCKTERR:
+                    merror("Corrupt payload (exceeding size) received.");
+                    break;
+
+                case -1:
+                    if (errno == ENOTCONN) {
+                        mdebug1("Manager disconnected (ENOTCONN).");
+                    } else {
+                        merror("Connection socket: %s (%d)", strerror(errno), errno);
+                    }
+                    break;
+
+                case 0:
+                    mdebug1("Manager disconnected.");
                 }
+
+                // -1 means that the agent must reconnect
                 return -1;
-
-            case 0:
-                mdebug1("Manager disconnected.");
-                return -1;
-
-            default:
-                // length > OS_MAXSTR
-                if(length == 0){
-                	merror("Empty message from manager");
-                	return 0;
-                }else if(length > OS_MAXSTR){
-                	merror("Too big message size from manager.");
-                	return 0;
-                }
-            }
-
-            recv_b = recv(agt->sock, buffer, length, MSG_WAITALL);
-
-            if (recv_b != (ssize_t)length) {
-                merror("Incorrect message size from manager: expecting %u, got %d", length, (int)recv_b);
-                break;
             }
         } else {
             recv_b = recv(agt->sock, buffer, OS_MAXSTR, MSG_DONTWAIT);
@@ -91,8 +83,7 @@ int receive_msg()
 
         buffer[recv_b] = '\0';
 
-        tmp_msg = ReadSecMSG(&keys, buffer, cleartext, 0, recv_b - 1, &msg_length, agt->server[agt->rip_id].rip);
-        if (tmp_msg == NULL) {
+        if (ReadSecMSG(&keys, buffer, cleartext, 0, recv_b - 1, &msg_length, agt->server[agt->rip_id].rip, &tmp_msg) != KS_VALID) {
             mwarn(MSG_ERROR, agt->server[agt->rip_id].rip);
             continue;
         }
@@ -122,6 +113,7 @@ int receive_msg()
                         merror("Error communicating with execd");
                     }
                 }
+
 #else
                 /* Run on Windows */
                 if (agt->execdq >= 0) {
@@ -146,6 +138,44 @@ int receive_msg()
             // Request from manager (or request ack)
             else if (IS_REQ(tmp_msg)) {
                 req_push(tmp_msg + strlen(HC_REQUEST), msg_length - strlen(HC_REQUEST) - 3);
+                continue;
+            }
+
+            /* Security configuration assessment DB request */
+            else if (strncmp(tmp_msg,CFGA_DB_DUMP,strlen(CFGA_DB_DUMP)) == 0) {
+#ifndef WIN32
+                /* Connect to the Security configuration assessment queue */
+                if (agt->cfgadq >= 0) {
+                    if (OS_SendUnix(agt->cfgadq, tmp_msg, 0) < 0) {
+                        merror("Error communicating with Security configuration assessment");
+                        close(agt->cfgadq);
+
+                        if ((agt->cfgadq = StartMQ(CFGAQUEUE, WRITE)) < 0) {
+                            merror("Unable to connect to the Security configuration assessment "
+                                    "queue (disabled).");
+                            agt->cfgadq = -1;
+                        } else if (OS_SendUnix(agt->cfgadq, tmp_msg, 0) < 0) {
+                            merror("Error communicating with Security configuration assessment");
+                            close(agt->cfgadq);
+                            agt->cfgadq = -1;
+                        }
+                    }
+                } else {
+                    if ((agt->cfgadq = StartMQ(CFGAQUEUE, WRITE)) < 0) {
+                        merror("Unable to connect to the Security configuration assessment "
+                            "queue (disabled).");
+                        agt->cfgadq = -1;
+                    } else {
+                         if (OS_SendUnix(agt->cfgadq, tmp_msg, 0) < 0) {
+                            merror("Error communicating with Security configuration assessment");
+                            close(agt->cfgadq);
+                            agt->cfgadq = -1;
+                        }
+                    }
+                }
+#else
+                wm_sca_push_request_win(tmp_msg);
+#endif
                 continue;
             }
 

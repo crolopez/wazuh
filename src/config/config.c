@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -50,6 +51,11 @@ static int read_main_elements(const OS_XML *xml, int modules,
     const char *oslogging = "logging";                  /* Logging Config */
     const char *oscluster = "cluster";                  /* Cluster Config */
     const char *ossocket = "socket";                    /* Socket Config */
+    const char *ossca = "sca";                          /* Security Configuration Assessment */
+    const char *osvulndet = "vulnerability-detector";   /* Vulnerability Detector Config */
+#ifndef WIN32
+    const char *osfluent_forward = "fluent-forward";     /* Fluent forwarder */
+#endif
 
     while (node[i]) {
         XML_NODE chld_node = NULL;
@@ -91,7 +97,7 @@ static int read_main_elements(const OS_XML *xml, int modules,
                 goto fail;
             }
         } else if (strcmp(node[i]->element, ossyscheck) == 0) {
-            if ((modules & CSYSCHECK) && (Read_Syscheck(chld_node, d1, d2) < 0)) {
+            if ((modules & CSYSCHECK) && (Read_Syscheck(xml, chld_node, d1, d2) < 0)) {
                 goto fail;
             }
             if ((modules & CGLOBAL) && (Read_GlobalSK(chld_node, d1, d2) < 0)) {
@@ -137,7 +143,27 @@ static int read_main_elements(const OS_XML *xml, int modules,
             if ((modules & CWMODULE) && (Read_WModule(xml, node[i], d1, d2) < 0)) {
                 goto fail;
             }
-        } else if (chld_node && (strcmp(node[i]->element, oslabels) == 0)) {
+        } else if (strcmp(node[i]->element, ossca) == 0) {
+            if ((modules & CWMODULE) && (Read_SCA(xml, node[i], d1) < 0)) {
+                goto fail;
+            }
+        } else if (strcmp(node[i]->element, osvulndet) == 0) {
+#if !defined(WIN32) && !defined(CLIENT)
+            if ((modules & CWMODULE) && (Read_Vuln(xml, chld_node, d1, 1) < 0)) {
+                goto fail;
+            }
+#else
+            mwarn("%s configuration is only set in the manager.", node[i]->element);
+#endif
+        }
+#ifndef WIN32
+        else if (strcmp(node[i]->element, osfluent_forward) == 0) {
+            if ((modules & CWMODULE) && (Read_Fluent_Forwarder(xml, node[i], d1) < 0)) {
+                goto fail;
+            }
+        }
+#endif
+        else if (chld_node && (strcmp(node[i]->element, oslabels) == 0)) {
             if ((modules & CLABELS) && (Read_Labels(chld_node, d1, d2) < 0)) {
                 goto fail;
             }
@@ -252,6 +278,12 @@ int ReadConfig(int modules, const char *cfgfile, void *d1, void *d2)
 
                         if (!agentname) {
                             passed_agent_test = 0;
+                            merror("Reading shared configuration. Unable to retrieve the agent name.");
+                        } else if (strlen(node[i]->values[attrs]) > OS_PATTERN_MAXSIZE) {
+                            int attrlen = strlen(node[i]->values[attrs]);
+                            mwarn("Agent name filter (%d bytes) exceeds the limit (%d)", attrlen, OS_PATTERN_MAXSIZE);
+                            passed_agent_test = 0;
+                            free(agentname);
                         } else {
                             if (!OS_Match2(node[i]->values[attrs], agentname)) {
                                 passed_agent_test = 0;
@@ -263,22 +295,29 @@ int ReadConfig(int modules, const char *cfgfile, void *d1, void *d2)
 #ifdef CLIENT
                         const char *agentos = getuname();
 
-                        if (agentos) {
-                            if (!OS_Match2(node[i]->values[attrs], agentos)) {
-                                passed_agent_test = 0;
-                            }
-                        } else {
+                        if (!agentos) {
                             passed_agent_test = 0;
-                            merror("Unable to retrieve uname.");
+                            merror("Reading shared configuration. Unable to retrieve the agent OS.");
+                        } else if (strlen(node[i]->values[attrs]) > OS_PATTERN_MAXSIZE) {
+                            int attrlen = strlen(node[i]->values[attrs]);
+                            mwarn("Agent OS filter (%d bytes) exceeds the limit (%d)", attrlen, OS_PATTERN_MAXSIZE);
+                            passed_agent_test = 0;
+                        } else if (!OS_Match2(node[i]->values[attrs], agentos)) {
+                            passed_agent_test = 0;
                         }
 #endif
                     } else if (strcmp(xml_agent_profile, node[i]->attributes[attrs]) == 0) {
 #ifdef CLIENT
                         char *agentprofile = os_read_agent_profile();
-                        mdebug2("Read agent config profile name [%s]", agentprofile);
 
                         if (!agentprofile) {
                             passed_agent_test = 0;
+                            merror("Reading shared configuration. Unable to retrieve agent profile.");
+                        } else if (strlen(node[i]->values[attrs]) > OS_PATTERN_MAXSIZE) {
+                            int attrlen = strlen(node[i]->values[attrs]);
+                            mwarn("Agent profile filter (%d bytes) exceeds the limit (%d)", attrlen, OS_PATTERN_MAXSIZE);
+                            passed_agent_test = 0;
+                            free(agentprofile);
                         } else {
                             /* match the profile name of this <agent_config> section
                              * with a comma separated list of values in agent's

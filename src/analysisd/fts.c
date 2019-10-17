@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -41,10 +42,14 @@ int FTS_Init(int threads)
         return (0);
     }
 
-    pthread_rwlock_init(&file_update_rwlock, NULL);
+    w_rwlock_init(&file_update_rwlock, NULL);
     fts_write_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 
     fp_ignore = (FILE **)calloc(threads, sizeof(FILE*));
+    if (!fp_ignore) {
+        merror(MEM_ERROR, errno, strerror(errno));
+        return (0);
+    }
 
     /* Create store data */
     fts_store = OSHash_Create();
@@ -114,10 +119,14 @@ int FTS_Init(int threads)
         }
 
         os_strdup(_line, tmp_s);
-        if (OSHash_Add(fts_store, tmp_s, tmp_s) <= 0) {
+        if (OSHash_Add(fts_store, tmp_s, tmp_s) != 2) {
             free(tmp_s);
             merror(LIST_ADD_ERROR);
         }
+
+        /* Reset pointer addresses before using strdup() again */
+        /* The hash will keep the needed memory references */
+        tmp_s = NULL;
     }
 
     /* Create ignore list */
@@ -273,7 +282,7 @@ char * FTS(Eventinfo *lf)
     int number_of_matches = 0;
     char *_line = NULL;
     char *line_for_list = NULL;
-    OSListNode *fts_node;
+    OSListNode *fts_node = NULL;
     const char *field;
 
     os_calloc(OS_FLSIZE + 1,sizeof(char),_line);
@@ -325,24 +334,39 @@ char * FTS(Eventinfo *lf)
             fts_node = OSList_GetPrevNode(fts_list);
         }
 
+        fts_node = NULL;
+
         os_strdup(_line, line_for_list);
-        OSList_AddData(fts_list, line_for_list);
+        if (!line_for_list) {
+            merror(MEM_ERROR, errno, strerror(errno));
+            free(_line);
+            return NULL;
+        }
+
+        fts_node = OSList_AddData(fts_list, line_for_list);
+        if (!fts_node) {
+            free(line_for_list);
+            free(_line);
+            return NULL;
+        }
     }
 
     /* Store new entry */
     if (line_for_list == NULL) {
         os_strdup(_line, line_for_list);
+        if (!line_for_list) {
+            merror(MEM_ERROR, errno, strerror(errno));
+            free(_line);
+            return NULL;
+        }
     }
 
-    if (OSHash_Add_ex(fts_store, line_for_list, line_for_list) <= 1) {
+    if (OSHash_Add_ex(fts_store, line_for_list, line_for_list) != 2) {
+        if (fts_node) OSList_DeleteThisNode(fts_list, fts_node);
+        free(line_for_list);
         free(_line);
         return NULL;
     }
-
-
-#ifdef TESTRULE
-    return _line;
-#endif
 
     return _line;
 }

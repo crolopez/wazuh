@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -204,6 +205,7 @@ Eventinfo *Accumulate(Eventinfo *lf)
         }
     } else {
         if ((result = OSHash_Add_ex(acm_store, _key, stored_data)) != 2 ) {
+            FreeACMStore(stored_data);
             merror("accumulator: ERROR: Addition of stored data for %s failed (%d).", _key, result);
         } else {
             mdebug1("accumulator: DEBUG: Added stored data for %s", _key);

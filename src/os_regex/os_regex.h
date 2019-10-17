@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -9,8 +10,8 @@
 
 /* See README for details */
 
-#ifndef __OS_REGEX_H
-#define __OS_REGEX_H
+#ifndef OS_REGEX_H
+#define OS_REGEX_H
 
 /* size_t */
 #include <stddef.h>
@@ -21,7 +22,7 @@
 #define OS_CASE_SENSITIVE       0000400
 
 /* Pattern maximum size */
-#define OS_PATTERN_MAXSIZE      2048
+#define OS_PATTERN_MAXSIZE      20480
 
 /* Error codes */
 #define OS_REGEX_REG_NULL       1
@@ -99,10 +100,6 @@ const char *OSRegex_Execute(const char *str, OSRegex *reg) __attribute__((nonnul
 /* Release all the memory created by the compilation/execution phases */
 void OSRegex_FreePattern(OSRegex *reg) __attribute__((nonnull));
 
-
-/* Release all the memory created to store the sub strings */
-void OSRegex_FreeSubStrings(OSRegex *reg) __attribute__((nonnull));
-
 /* This function is a wrapper around the compile/execute
  * functions. It should only be used when the pattern is
  * only going to be used once.
@@ -122,7 +119,7 @@ int OSMatch_Compile(const char *pattern, OSMatch *reg, int flags);
  * Returns 1 on success or 0 on error.
  * The error code is set on reg->error.
  */
-int OSMatch_Execute(const char *str, size_t str_len, OSMatch *reg)  __attribute__((nonnull(3)));
+int OSMatch_Execute(const char *str, size_t str_len, OSMatch *reg);
 
 /* Release all the memory created by the compilation/execution phases */
 void OSMatch_FreePattern(OSMatch *reg) __attribute__((nonnull));
@@ -159,4 +156,4 @@ int OS_StrIsNum(const char *str);
 extern const unsigned char hostname_map[256];
 #define isValidChar(x) (hostname_map[(unsigned char)x])
 
-#endif /* __OS_REGEX_H */
+#endif /* OS_REGEX_H */

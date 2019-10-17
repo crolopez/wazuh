@@ -1,7 +1,12 @@
 #!/usr/bin/env python
 ################################################################################
 # Wazuh wrapper for OpenSCAP
-# Wazuh Inc.
+# Copyright (C) 2015-2019, Wazuh Inc.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
 # Oct 25, 2016
 ################################################################################
 
@@ -349,7 +354,7 @@ if __name__ == "__main__":
         else:
             print("{0} Impossible to execute OpenSCAP. Details: {1}.".format(OSCAP_LOG_ERROR, e))
 
-        exit(1)
+        exit(2)
 
     # Check xsltproc installed
     try:
@@ -360,7 +365,7 @@ if __name__ == "__main__":
             print("{0} xsltproc not installed. Details: {1}.".format(OSCAP_LOG_ERROR, e))
         else:
             print("{0} Impossible to execute xsltproc. Details: {1}.".format(OSCAP_LOG_ERROR, e))
-        exit(1)
+        exit(2)
 
 
     # Check policy

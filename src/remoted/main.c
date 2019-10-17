@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -135,14 +136,14 @@ int main(int argc, char **argv)
     int is_worker = w_is_worker();
 
     switch (is_worker){
-        case -1:
-            merror("Cannot read cluster config %s", strerror(errno));
+        case 0:
+            mdebug1("This is not a worker");
             break;
         case 1:
-            mdebug1("Cluster client node: Disabling the merged.mg creation");
+            mdebug1("Cluster worker node: Disabling the merged.mg creation");
             logr.nocmerged = 1;
             break;
-}
+    }
 
     /* Exit if test_config is set */
     if (test_config) {
@@ -151,6 +152,7 @@ int main(int argc, char **argv)
 
     if (logr.conn == NULL) {
         /* Not configured */
+        minfo("Remoted connection is not configured... Exiting.");
         exit(0);
     }
 
@@ -169,9 +171,6 @@ int main(int argc, char **argv)
 
     /* Setup random */
     srandom_init();
-
-    /* pid before going daemon */
-    i = getpid();
 
     if (!run_foreground) {
         nowDaemon();
@@ -198,7 +197,7 @@ int main(int argc, char **argv)
     os_random();
 
     /* Start up message */
-    minfo(STARTUP_MSG, (int)getpid());
+    mdebug2(STARTUP_MSG, (int)getpid());
 
     //Start shared download
     w_init_shared_download();

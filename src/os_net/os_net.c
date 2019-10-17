@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -22,8 +23,6 @@ static int OS_Connect(u_int16_t _port, unsigned int protocol, const char *_ip, i
 
 /* Unix socket -- not for windows */
 #ifndef WIN32
-static struct sockaddr_un n_us;
-static socklen_t us_l = sizeof(n_us);
 
 /* UNIX SOCKET */
 #ifndef SUN_LEN
@@ -56,12 +55,20 @@ static int OS_Bindport(u_int16_t _port, unsigned int _proto, const char *_ip, in
 #endif
 
     if (_proto == IPPROTO_UDP) {
+#ifndef WIN32
         if ((ossock = socket(ipv6 == 1 ? PF_INET6 : PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+#else
+        if ((ossock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+#endif
             return OS_SOCKTERR;
         }
     } else if (_proto == IPPROTO_TCP) {
         int flag = 1;
+#ifndef WIN32
         if ((ossock = socket(ipv6 == 1 ? PF_INET6 : PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+#else
+        if ((ossock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+#endif
             return (int)(OS_SOCKTERR);
         }
 
@@ -129,6 +136,7 @@ int OS_Bindportudp(u_int16_t _port, const char *_ip, int ipv6)
 /* Bind to a Unix domain, using DGRAM sockets */
 int OS_BindUnixDomain(const char *path, int type, int max_msg_size)
 {
+    struct sockaddr_un n_us;
     int ossock = 0;
 
     /* Make sure the path isn't there */
@@ -164,6 +172,11 @@ int OS_BindUnixDomain(const char *path, int type, int max_msg_size)
         return (OS_SOCKTERR);
     }
 
+    // Set close-on-exec
+    if (fcntl(ossock, F_SETFD, FD_CLOEXEC) == -1) {
+        mwarn("Cannot set close-on-exec flag to socket: %s (%d)", strerror(errno), errno);
+    }
+
     return (ossock);
 }
 
@@ -172,6 +185,8 @@ int OS_BindUnixDomain(const char *path, int type, int max_msg_size)
  */
 int OS_ConnectUnixDomain(const char *path, int type, int max_msg_size)
 {
+    struct sockaddr_un n_us;
+
     int ossock = 0;
 
     memset(&n_us, 0, sizeof(n_us));
@@ -195,6 +210,11 @@ int OS_ConnectUnixDomain(const char *path, int type, int max_msg_size)
     if (OS_SetSocketSize(ossock, SEND_SOCK, max_msg_size) < 0) {
         OS_CloseSocket(ossock);
         return (OS_SOCKTERR);
+    }
+
+    // Set close-on-exec
+    if (fcntl(ossock, F_SETFD, FD_CLOEXEC) == -1) {
+        mwarn("Cannot set close-on-exec flag to socket: %s (%d)", strerror(errno), errno);
     }
 
     return (ossock);
@@ -228,11 +248,19 @@ static int OS_Connect(u_int16_t _port, unsigned int protocol, const char *_ip, i
 #endif
 
     if (protocol == IPPROTO_TCP) {
+#ifndef WIN32
         if ((ossock = socket(ipv6 == 1 ? PF_INET6 : PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+#else
+        if ((ossock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+#endif
             return (OS_SOCKTERR);
         }
     } else if (protocol == IPPROTO_UDP) {
+#ifndef WIN32
         if ((ossock = socket(ipv6 == 1 ? PF_INET6 : PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+#else
+        if ((ossock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+#endif
             return (OS_SOCKTERR);
         }
     } else {
@@ -263,7 +291,13 @@ static int OS_Connect(u_int16_t _port, unsigned int protocol, const char *_ip, i
         server.sin_addr.s_addr = inet_addr(_ip);
 
         if (connect(ossock, (struct sockaddr *)&server, sizeof(server)) < 0) {
+#ifdef WIN32
+            int error = WSAGetLastError();
+#endif
             OS_CloseSocket(ossock);
+#ifdef WIN32
+            WSASetLastError(error);
+#endif
             return (OS_SOCKTERR);
         }
     }
@@ -430,6 +464,8 @@ int OS_RecvConnUDP(int socket, char *buffer, int buffer_size)
 /* Receive a message from a Unix socket */
 int OS_RecvUnix(int socket, int sizet, char *ret)
 {
+    struct sockaddr_un n_us;
+    socklen_t us_l = sizeof(n_us);
     ssize_t recvd;
     ret[sizet] = '\0';
 
@@ -477,7 +513,8 @@ char *OS_GetHost(const char *host, unsigned int attempts)
 
     while (i <= attempts) {
         if ((h = gethostbyname(host)) == NULL) {
-            sleep(i++);
+            sleep(1);
+            i++;
             continue;
         }
 
@@ -486,7 +523,9 @@ char *OS_GetHost(const char *host, unsigned int attempts)
             return (NULL);
         }
 
+#ifndef __clang_analyzer__
         strncpy(ip, inet_ntoa(*((struct in_addr *)h->h_addr)), sz - 1);
+#endif
 
         return (ip);
     }
@@ -503,16 +542,47 @@ int OS_CloseSocket(int socket)
 #endif /* WIN32 */
 }
 
+int OS_SetKeepalive(int socket)
+{
+    int keepalive = 1;
+    return setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE, (void *)&keepalive, sizeof(keepalive));
+}
+
+#ifndef CLIENT
+void OS_SetKeepalive_Options(int socket, int idle, int intvl, int cnt)
+{
+    if (setsockopt(socket, IPPROTO_TCP, TCP_KEEPCNT, (void *)&cnt, sizeof(cnt)) < 0) {
+        merror("OS_SetKeepalive_Options(TCP_KEEPCNT) failed with error '%s'", strerror(errno));
+    }
+    if (setsockopt(socket, IPPROTO_TCP, TCP_KEEPIDLE, (void *)&idle, sizeof(idle)) < 0) {
+        merror("OS_SetKeepalive_Options(SO_KEEPIDLE) failed with error '%s'", strerror(errno));
+    }
+    if (setsockopt(socket, IPPROTO_TCP, TCP_KEEPINTVL, (void *)&intvl, sizeof(intvl)) < 0) {
+        merror("OS_SetKeepalive_Options(TCP_KEEPINTVL) failed with error '%s'", strerror(errno));
+    }
+}
+#endif
+
 int OS_SetRecvTimeout(int socket, long seconds, long useconds)
 {
+#ifdef WIN32
+    DWORD ms = seconds * 1000 + useconds / 1000;
+    return setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (const void *)&ms, sizeof(ms));
+#else
     struct timeval tv = { seconds, useconds };
     return setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (const void *)&tv, sizeof(tv));
+#endif
 }
 
 int OS_SetSendTimeout(int socket, int seconds)
 {
+#ifdef WIN32
+    DWORD ms = seconds * 1000;
+    return setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, (const void *)&ms, sizeof(ms));
+#else
     struct timeval tv = { seconds, 0 };
     return setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, (const void *)&tv, sizeof(tv));
+#endif
 }
 
 /* Send secure TCP message
@@ -527,8 +597,8 @@ int OS_SendSecureTCP(int sock, uint32_t size, const void * msg) {
     os_malloc(bufsz, buffer);
     *(uint32_t *)buffer = wnet_order(size);
     memcpy(buffer + sizeof(uint32_t), msg, size);
+    errno = 0;
     retval = send(sock, buffer, bufsz, 0) == (ssize_t)bufsz ? 0 : OS_SOCKTERR;
-
     free(buffer);
     return retval;
 }
@@ -542,7 +612,8 @@ int OS_RecvSecureTCP(int sock, char * ret,uint32_t size) {
     ssize_t recvval, recvb;
     uint32_t msgsize;
 
-    recvval = recv(sock, (char *) &msgsize, sizeof(msgsize), MSG_WAITALL);
+    /* Get header */
+    recvval = os_recv_waitall(sock, &msgsize, sizeof(msgsize));
 
     switch(recvval) {
         case -1:
@@ -557,10 +628,14 @@ int OS_RecvSecureTCP(int sock, char * ret,uint32_t size) {
     msgsize = wnet_order(msgsize);
 
     if(msgsize > size){
+        /* Error: the payload length is too long */
         return OS_SOCKTERR;
     }
 
-    recvb = recv(sock, ret, msgsize, MSG_WAITALL);
+    /* Get payload */
+    recvb = os_recv_waitall(sock, ret, msgsize);
+
+    /* Terminate string if there is space left */
 
     if (recvb == (int32_t) msgsize && msgsize < size) {
         ret[msgsize] = '\0';
@@ -569,91 +644,10 @@ int OS_RecvSecureTCP(int sock, char * ret,uint32_t size) {
     return recvb;
 }
 
-
-ssize_t OS_RecvSecureTCP_Dynamic(int sock, char **ret) {
-    ssize_t recvval, recvmsg = 0;
-    char *dyn_buffer;
-    const size_t bufsz = 512;
-    char static_buf[bufsz+1];
-    uint64_t msgsize;
-
-    recvval = recv(sock, static_buf, bufsz, 0);
-
-    switch(recvval){
-
-        case -1:
-            return -1;
-
-        case 0:
-            return 0;
-    }
-
-    static_buf[recvval] = '\0';
-
-    if (static_buf[0] == '!') {
-        char * c;
-        char * data;
-
-        if (c = strchr(static_buf, ' '), c) {
-            *c = '\0';
-            data = c + 1;
-
-            if (msgsize = strtoul(static_buf + 1, &c, 10), *c) {
-                merror("At OS_RecvSecureTCP(): invalid message size");
-                return -1;
-            }
-
-            if(msgsize > MAX_DYN_STR) {
-                return OS_MAXLEN;
-            }
-        } else {
-            merror("At OS_RecvSecureTCP(): invalid message received");
-            return -1;
-        }
-
-        os_malloc(msgsize + 1, *ret);
-        memcpy(*ret, data, msgsize);
-        recvval = strlen(data);
-
-        if ((uint32_t)recvval < msgsize) {
-            recvmsg = recv(sock, *ret + recvval, msgsize - recvval, MSG_WAITALL);
-
-            switch(recvmsg){
-                case -1:
-                case 0:
-                    free(*ret);
-                    return 0;
-            }
-        }
-        *(*ret + msgsize) = '\0';
-        return msgsize;
-    }
-    else {
-        os_malloc(OS_MAXSTR + 2, dyn_buffer);
-
-        recvmsg = recv(sock, dyn_buffer + 1, OS_MAXSTR, 0);
-
-        switch(recvmsg){
-            case -1:
-                free(dyn_buffer);
-                return -1;
-
-            case 0:
-                free(dyn_buffer);
-                return 0;
-        }
-
-        dyn_buffer[recvmsg + 1] = '\0';
-        *ret = dyn_buffer;
-
-        return recvmsg;
-    }
-}
-
 // Byte ordering
 
 uint32_t wnet_order(uint32_t value) {
-#if (defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) || defined(OS_BIG_ENDIAN)
+#if defined(__sparc__) || defined(__BIG_ENDIAN__) || (defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) || defined(OS_BIG_ENDIAN)
     return (value >> 24) | (value << 24) | ((value & 0xFF0000) >> 8) | ((value & 0xFF00) << 8);
 #else
     return value;
@@ -662,7 +656,11 @@ uint32_t wnet_order(uint32_t value) {
 
 
 uint32_t wnet_order_big(uint32_t value) {
+#if defined(__sparc__) || defined(__BIG_ENDIAN__) || (defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) || defined(OS_BIG_ENDIAN)
+    return value;
+#else
     return (value >> 24) | (value << 24) | ((value & 0xFF0000) >> 8) | ((value & 0xFF00) << 8);
+#endif
 }
 
 /* Set the maximum buffer size for the socket */
@@ -715,7 +713,7 @@ int OS_SendSecureTCPCluster(int sock, const void * command, const void * payload
     const unsigned MAX_PAYLOAD_SIZE = 1000000;
     int retval;
     char * buffer = NULL;
-    uint32_t counter = os_random() % 4294967295;
+    uint32_t counter = (uint32_t)os_random();
     size_t cmd_length = 0;
     size_t buffer_size = 0;
 
@@ -763,7 +761,7 @@ int OS_RecvSecureClusterTCP(int sock, char * ret, size_t length) {
     uint32_t size = 0;
     char buffer[HEADER_SIZE];
 
-    recvval = recv(sock, buffer, HEADER_SIZE, MSG_WAITALL);
+    recvval = os_recv_waitall(sock, buffer, HEADER_SIZE);
 
     switch(recvval){
         case -1:
@@ -788,5 +786,36 @@ int OS_RecvSecureClusterTCP(int sock, char * ret, size_t length) {
     }
 
     /* Read the payload */
-    return recv(sock, ret, size, MSG_WAITALL);
+    return os_recv_waitall(sock, ret, size);
+}
+
+/* Receive a message from a stream socket, full message (MSG_WAITALL)
+ * Returns size on success.
+ * Returns -1 on socket error.
+ * Returns 0 on socket disconnected or timeout.
+ */
+ssize_t os_recv_waitall(int sock, void * buf, size_t size) {
+    size_t offset;
+    ssize_t recvb;
+
+    for (offset = 0; offset < size; offset += recvb) {
+        recvb = recv(sock, buf + offset, size - offset, 0);
+
+        if (recvb <= 0) {
+            return recvb;
+        }
+    }
+
+    return offset;
+}
+
+// Wrapper for select()
+int wnet_select(int sock, int timeout) {
+    fd_set fdset;
+    struct timeval fdtimeout = { timeout, 0 };
+
+    FD_ZERO(&fdset);
+    FD_SET(sock, &fdset);
+
+    return select(sock + 1, &fdset, NULL, NULL, &fdtimeout);
 }

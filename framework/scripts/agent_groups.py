@@ -1,28 +1,22 @@
-#!/usr/bin/env python
+#!/var/ossec/framework/python/bin/python3
 
+# Copyright (C) 2015-2019, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
-# This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
+# This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 
-from sys import exit, path, argv
-from os.path import dirname, basename
+from sys import exit, argv
+from os.path import basename
 from getopt import GetoptError, getopt
 from signal import signal, SIGINT
-
-# Set framework path
-path.append(dirname(argv[0]) + '/../framework')  # It is necessary to import Wazuh package
+import logging
 from wazuh.cluster.cluster import read_config
-
-# Import framework
-try:
-    from wazuh import Wazuh
-    from wazuh.agent import Agent
-    from wazuh.exception import WazuhException
-except Exception as e:
-    print("Error importing 'Wazuh' package.\n\n{0}\n".format(e))
-    exit()
+from wazuh import Wazuh
+from wazuh.agent import Agent
+from wazuh.exception import WazuhException
 
 # Global variables
 debug = False
+
 
 # Functions
 def get_stdin(msg):
@@ -55,11 +49,13 @@ def show_group(agent_id):
     str_group = ', '.join(agent_info['group']) if 'group' in agent_info else "Null"
     print("The agent '{0}' with ID '{1}' belongs to groups: {2}.".format(agent_info['name'], agent_info['id'], str_group))
 
+
 def show_synced_agent(agent_id):
 
     result = Agent(agent_id).get_sync_group(agent_id)
 
     print("Agent '{}' is{} synchronized. ".format(agent_id,'' if result['synced'] else ' not'))
+
 
 def show_agents_with_group(group_id):
     agents_data = Agent.get_agent_group(group_id, limit=None)
@@ -69,7 +65,7 @@ def show_agents_with_group(group_id):
     else:
         print("{0} agent(s) in group '{1}':".format(agents_data['totalItems'], group_id))
         for agent in agents_data['items']:
-            print("  ID: {0}  Name: {1}. {2}".format(agent['id'], agent['name'], agent['multi_group']))
+            print("  ID: {0}  Name: {1}.".format(agent['id'], agent['name']))
 
 
 def show_group_files(group_id):
@@ -165,7 +161,7 @@ def usage():
     \t-c -g group_id                        # List configuration files in group
     \t
     \t-a -i agent_id -g group_id [-q] [-f]  # Add group to agent
-    \t-r -i agent_id [-q] [-g]              # Remove all groups from agent
+    \t-r -i agent_id [-q] [-g group_id]     # Remove all groups from agent [or single group]
     \t-s -i agent_id                        # Show group of agent
     \t-S -i agent_id                        # Show sync status of agent
     \t
@@ -250,9 +246,6 @@ def main():
         else:
             invalid_option()
 
-    # Initialize framework
-    myWazuh = Wazuh(get_init=True)
-
     # Actions
     if arguments['n_args'] > 5 or arguments['n_actions'] > 1:
         invalid_option("Bad argument combination.")
@@ -296,12 +289,13 @@ def main():
 
 
 if __name__ == "__main__":
+    logger = logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     try:
         cluster_config = read_config()
         executable_name = "agent_groups"
         master_ip = cluster_config['nodes'][0]
-        if cluster_config['node_type'] != 'master' and cluster_config['disabled'] == 'no':
+        if cluster_config['node_type'] != 'master' and not cluster_config['disabled']:
             raise WazuhException(3019, {"EXECUTABLE_NAME": executable_name, "MASTER_IP": master_ip})
         main()
 

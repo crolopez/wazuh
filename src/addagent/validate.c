@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -12,6 +13,7 @@
 #include "os_crypto/sha256/sha256_op.h"
 #ifndef CLIENT
 #include "wazuh_db/wdb.h"
+#include "wazuhdb_op.h"
 #endif
 
 #define str_startwith(x, y) strncmp(x, y, strlen(y))
@@ -59,6 +61,8 @@ int OS_AddNewAgent(keystore *keys, const char *id, const char *name, const char 
     return OS_AddKey(keys, id, name, ip ? ip : "any", key);
 }
 
+#ifndef CLIENT
+
 int OS_RemoveAgent(const char *u_id) {
     FILE *fp;
     File file;
@@ -69,6 +73,8 @@ int OS_RemoveAgent(const char *u_id) {
     char *buffer;
     char buf_curline[OS_BUFFER_SIZE];
     struct stat fp_stat;
+    char wdbquery[OS_SIZE_128 + 1];
+    char *wdboutput;
 
     id_exist = IDExist(u_id, 1);
 
@@ -112,7 +118,6 @@ int OS_RemoveAgent(const char *u_id) {
         return 0;
     }
 
-#ifndef REUSE_ID
     char *ptr_name = strchr(buf_curline, ' ');
 
     if (!ptr_name) {
@@ -128,8 +133,6 @@ int OS_RemoveAgent(const char *u_id) {
     size_t curline_len = strlen(buf_curline);
     memcpy(buffer + fp_read, buf_curline, curline_len);
     fp_read += curline_len;
-
-#endif
 
     if (!feof(fp))
         fp_read += fread(buffer + fp_read, sizeof(char), fp_stat.st_size, fp);
@@ -160,12 +163,25 @@ int OS_RemoveAgent(const char *u_id) {
         free(full_name);
     }
 
+    // Remove DB from wazuh-db
+    snprintf(wdbquery, OS_SIZE_128, "agent %s remove", u_id);
+    wdb_send_query(wdbquery, &wdboutput);
+
+    if (wdboutput) {
+        mdebug1("DB from agent %s was deleted '%s'", u_id, wdboutput);
+        os_free(wdboutput);
+    }
+
+
     /* Remove counter for ID */
     OS_RemoveCounter(u_id);
     OS_RemoveAgentTimestamp(u_id);
     OS_RemoveAgentGroup(u_id);
     return 1;
 }
+
+#endif
+
 
 int OS_IsValidID(const char *id)
 {
@@ -839,54 +855,10 @@ void OS_RemoveAgentGroup(const char *id)
                 *endl = '\0';
             }
 
-            /* Remove multigroup if it's not used on any other agent */
-            w_remove_multigroup(group);
         }
-#ifndef CLIENT
-        /* Remove from the 'belongs' table groups which the agent belongs to*/
-        wdb_delete_agent_belongs(atoi(id));
-#endif
 
         if(fp){
             fclose(fp);
-        }
-    }
-}
-
-void w_remove_multigroup(const char *group){
-    char *multigroup = strchr(group,MULTIGROUP_SEPARATOR);
-    char path[PATH_MAX + 1] = {0};
-    char metadata_file[PATH_MAX + 1] = {0};
-    int line = 0;
-
-    if(multigroup){
-        sprintf(path,"%s",isChroot() ?  GROUPS_DIR :  DEFAULTDIR GROUPS_DIR);
-
-        if(wstr_find_in_folder(path,group,1) < 0){
-            sprintf(metadata_file,"%s/%s",isChroot() ?  MULTIGROUPS_DIR :  DEFAULTDIR MULTIGROUPS_DIR, ".metadata");
-
-            line = wstr_find_line_in_file(metadata_file,group,1);
-
-            if(line >= 0){
-                /* Remove line from file */
-                w_remove_line_from_file(metadata_file,line);
-            }
-
-            /* Remove the DIR */
-            os_sha256 multi_group_hash;
-            OS_SHA256_String(group,multi_group_hash);
-            char _hash[9] = {0};
-
-            /* We only want the 8 first bytes of the hash */
-            multi_group_hash[8] = '\0';
-
-            strncpy(_hash,multi_group_hash,8);
-
-            sprintf(path,"%s/%s",isChroot() ? MULTIGROUPS_DIR : DEFAULTDIR MULTIGROUPS_DIR,_hash);
-
-            if (rmdir_ex(path) != 0) {
-                mdebug1("At w_remove_multigroup(): Directory '%s' couldn't be deleted. ('%s')",path, strerror(errno));
-            }
         }
     }
 }

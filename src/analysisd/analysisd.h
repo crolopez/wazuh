@@ -1,14 +1,15 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
  */
 
-#ifndef _LOGAUDIT__H
-#define _LOGAUDIT__H
+#ifndef LOGAUDIT_H
+#define LOGAUDIT_H
 
 #include <sys/types.h>
 
@@ -42,9 +43,9 @@ extern EventList *last_events_list;
 extern time_t current_time;
 
 // Com request thread dispatcher
-void * syscom_main(__attribute__((unused)) void * arg) ;
-size_t syscom_dispatch(char * command, char ** output);
-size_t syscom_getconfig(const char * section, char ** output);
+void * asyscom_main(__attribute__((unused)) void * arg) ;
+size_t asyscom_dispatch(char * command, char ** output);
+size_t asyscom_getconfig(const char * section, char ** output);
 
 #define WM_ANALYSISD_LOGTAG ARGV0 "" // Tag for log messages
 
@@ -69,4 +70,8 @@ void w_init_queues();
 OSHash *fim_agentinfo;
 extern int num_rule_matching_threads;
 
-#endif /* _LOGAUDIT__H */
+#define FIM_MAX_WAZUH_DB_ATTEMPS 5
+#define SYS_MAX_WAZUH_DB_ATTEMPS 5
+#define PM_MAX_WAZUH_DB_ATTEMPS 5
+
+#endif /* LOGAUDIT_H */

@@ -1,8 +1,9 @@
 <!--
   -  Postfix decoders
   -  Author: Daniel Cid.
+  -  Updated by Wazuh, Inc.
+  -  Copyright (C) 2015-2019, Wazuh Inc.
   -  Copyright (C) 2009 Trend Micro Inc.
-  -  Updated by Wazuh, Inc. <support@wazuh.com>.
   -  This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2.
 -->
 
@@ -47,4 +48,11 @@
   <prematch>^warning:</prematch>
   <regex>^warning: (\S+):|warning: Illegal address syntax from unknown[(\S+)]|warning: hostname \S+ does not resolve to address (\S+): </regex>
   <order>srcip</order>
+</decoder>
+
+<decoder name="postfix-too-many-errors">
+  <parent>postfix</parent>
+  <prematch>^too many errors after</prematch>
+  <regex>^too many errors after (\S+) from (\.+)[(\.+)]$</regex>
+  <order>action,srchost,srcip</order>
 </decoder>

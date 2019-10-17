@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -386,11 +387,12 @@ int main(int argc, char **argv)
                                           keys.keyentries[agt_id]->ip->ip);
 
             agt_info = get_agent_info(keys.keyentries[agt_id]->name,
-                                      keys.keyentries[agt_id]->ip->ip);
+                                      keys.keyentries[agt_id]->ip->ip,
+                                      agent_id);
 
             /* Get netmask from IP */
             getNetmask(keys.keyentries[agt_id]->ip->netmask, final_mask, 128);
-            snprintf(final_ip, 128, "%s%s", keys.keyentries[agt_id]->ip->ip,
+            snprintf(final_ip, sizeof(final_ip), "%s%s", keys.keyentries[agt_id]->ip->ip,
                      final_mask);
 
             if (!csv_output && !json_output) {
@@ -412,7 +414,7 @@ int main(int argc, char **argv)
             }
         } else {
             agt_status = get_agent_status(NULL, NULL);
-            agt_info = get_agent_info(NULL, "127.0.0.1");
+            agt_info = get_agent_info(NULL, "127.0.0.1", "000");
 
             if (!csv_output && !json_output) {
                 printf("\n   Agent ID:   000 (local instance)\n");
@@ -437,13 +439,13 @@ int main(int argc, char **argv)
             printf("   Shared file hash:    %s\n", agt_info->merged_sum);
             printf("   Last keep alive:     %s\n\n", agt_info->last_keepalive);
 
+            printf("   Syscheck last started at:  %s\n", agt_info->syscheck_time);
+            printf("   Syscheck last ended at:    %s\n", agt_info->syscheck_endtime);
+
             if (end_time) {
-                printf("   Syscheck last started at:  %s\n", agt_info->syscheck_time);
-                printf("   Syscheck last ended at:    %s\n", agt_info->syscheck_endtime);
                 printf("   Rootcheck last started at: %s\n", agt_info->rootcheck_time);
                 printf("   Rootcheck last ended at:   %s\n\n", agt_info->rootcheck_endtime);
             } else {
-                printf("   Syscheck last started  at: %s\n", agt_info->syscheck_time);
                 printf("   Rootcheck last started at: %s\n", agt_info->rootcheck_time);
             }
         }else if(json_output){
@@ -452,10 +454,10 @@ int main(int argc, char **argv)
                 cJSON_AddStringToObject(json_data, "mergedSum", agt_info->merged_sum);
                 cJSON_AddStringToObject(json_data, "lastKeepAlive", agt_info->last_keepalive);
                 cJSON_AddStringToObject(json_data, "syscheckTime", agt_info->syscheck_time);
+                cJSON_AddStringToObject(json_data, "syscheckEndTime", agt_info->syscheck_endtime);
                 cJSON_AddStringToObject(json_data, "rootcheckTime", agt_info->rootcheck_time);
 
                 if (end_time) {
-                    cJSON_AddStringToObject(json_data, "syscheckEndTime", agt_info->syscheck_endtime);
                     cJSON_AddStringToObject(json_data, "rootcheckEndTime", agt_info->rootcheck_endtime);
                 }
         } else {

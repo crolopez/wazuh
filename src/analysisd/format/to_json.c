@@ -1,7 +1,8 @@
-/* Copyright (C) 2015 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2015 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -10,6 +11,7 @@
 #include "to_json.h"
 #include "json_extended.h"
 #include "shared.h"
+#include "syscheck_op.h"
 #include "rules.h"
 #include "cJSON.h"
 #include "config.h"
@@ -29,6 +31,7 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
     char manager_name[512];
     char* out;
     int i;
+    char * saveptr;
 
     extern long int __crt_ftell;
 
@@ -92,11 +95,11 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
         if(lf->generated_rule->info) {
             cJSON_AddStringToObject(rule, "info", lf->generated_rule->info);
         }
-        if(lf->generated_rule->frequency){
-            cJSON_AddNumberToObject(rule, "frequency", lf->generated_rule->frequency);
+        if(lf->generated_rule->event_search){
+            cJSON_AddNumberToObject(rule, "frequency", lf->generated_rule->frequency + 2);
         }
-        if(lf->generated_rule->firedtimes && !(lf->generated_rule->alert_opts & NO_COUNTER)) {
-            cJSON_AddNumberToObject(rule, "firedtimes", lf->generated_rule->firedtimes);
+        if(lf->r_firedtimes != -1 && !(lf->generated_rule->alert_opts & NO_COUNTER)) {
+            cJSON_AddNumberToObject(rule, "firedtimes", lf->r_firedtimes);
         }
         cJSON_AddItemToObject(rule, "mail", cJSON_CreateBool(lf->generated_rule->alert_opts & DO_MAILALERT));
 
@@ -161,6 +164,9 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
         cJSON_AddItemToObject(root, "syscheck", file_diff);
         cJSON_AddStringToObject(file_diff, "path", lf->filename);
 
+        if (lf->sym_path && *lf->sym_path) {
+            cJSON_AddStringToObject(file_diff, "symbolic_path", lf->sym_path);
+        }
         if(lf->size_before) {
             if (strcmp(lf->size_before, "") != 0) {
                 cJSON_AddStringToObject(file_diff, "size_before", lf->size_before);
@@ -171,12 +177,26 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
                 cJSON_AddStringToObject(file_diff, "size_after", lf->size_after);
             }
         }
-        if (lf->perm_before) {
+        if (lf->win_perm_before && *lf->win_perm_before != '\0') {
+            cJSON *old_perm;
+            if (old_perm = perm_to_json(lf->win_perm_before), old_perm) {
+                cJSON_AddItemToObject(file_diff, "win_perm_before", old_perm);
+            } else {
+                merror("The old permissions could not be added to the JSON alert.");
+            }
+        } else if (lf->perm_before) {
             char perm[7];
             snprintf(perm, 7, "%6o", lf->perm_before);
             cJSON_AddStringToObject(file_diff, "perm_before", perm);
         }
-        if (lf->perm_after) {
+        if (lf->win_perm_after && *lf->win_perm_after != '\0') {
+            cJSON *new_perm;
+            if (new_perm = perm_to_json(lf->win_perm_after), new_perm) {
+                cJSON_AddItemToObject(file_diff, "win_perm_after", new_perm);
+            } else {
+                merror("The new permissions could not be added to the JSON alert.");
+            }
+        } else if (lf->perm_after) {
             char perm[7];
             snprintf(perm, 7, "%6o", lf->perm_after);
             cJSON_AddStringToObject(file_diff, "perm_after", perm);
@@ -231,6 +251,26 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
                 cJSON_AddStringToObject(file_diff, "sha256_after", lf->sha256_after);
             }
         }
+        if(lf->attrs_before) {
+            if (lf->attrs_before != 0) {
+                cJSON *old_attrs;
+                if (old_attrs = attrs_to_json(lf->attrs_before), old_attrs) {
+                    cJSON_AddItemToObject(file_diff, "attrs_before", old_attrs);
+                } else {
+                    merror("The old attributes could not be added to the JSON alert.");
+                }
+            }
+        }
+        if(lf->attrs_after) {
+            if (lf->attrs_after != 0) {
+                cJSON *new_attrs;
+                if (new_attrs = attrs_to_json(lf->attrs_after), new_attrs) {
+                    cJSON_AddItemToObject(file_diff, "attrs_after", new_attrs);
+                } else {
+                    merror("The new attributes could not be added to the JSON alert.");
+                }
+            }
+        }
         if(lf->uname_before) {
             if (strcmp(lf->uname_before, "") != 0) {
                 cJSON_AddStringToObject(file_diff, "uname_before", lf->uname_before);
@@ -279,10 +319,10 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
                 char * tag;
                 char * aux_tags;
                 os_strdup(lf->sk_tag, aux_tags);
-                tag = strtok(aux_tags, ",");
+                tag = strtok_r(aux_tags, ",", &saveptr);
                 while (tag != NULL) {
                     cJSON_AddItemToArray(tags, cJSON_CreateString(tag));
-                    tag = strtok(NULL, ",");
+                    tag = strtok_r(NULL, ",", &saveptr);
                 }
                 free(aux_tags);
             }
@@ -331,6 +371,9 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
 
     if(lf->data)
         cJSON_AddStringToObject(data, "data", lf->data);
+    
+    if(lf->extra_data)
+        cJSON_AddStringToObject(data, "extra_data", lf->extra_data);
 
     if(lf->systemname)
         cJSON_AddStringToObject(data, "system_name", lf->systemname);
@@ -353,7 +396,7 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
         add_json_field(group_sect, "name", lf->group_name, "");
 
         // Process section
-        add_json_field(process_sect, "id", lf->process_id, "0");
+        add_json_field(process_sect, "id", lf->process_id, "");
         add_json_field(process_sect, "name", lf->process_name, "");
         add_json_field(process_sect, "ppid", lf->ppid, "");
 

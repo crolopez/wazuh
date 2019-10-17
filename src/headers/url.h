@@ -1,9 +1,9 @@
 /*
  * URL download support library
- * Copyright (C) 2018 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * April 3, 2018.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -16,10 +16,16 @@
 
 #define WURL_WRITE_FILE_ERROR "Failed opening file '%s'"
 #define WURL_DOWNLOAD_FILE_ERROR "Failed to download file '%s' from url: %s"
+#define WURL_HTTP_GET_ERROR "Failed to get a response from '%s'"
 
-int wurl_get(const char * url, const char * dest);
+int wurl_get(const char * url, const char * dest, const char * header, const char *data);
 int w_download_status(int status,const char *url,const char *dest);
 // Request download
-int wurl_request(const char * url, const char * dest);
+int wurl_request(const char * url, const char * dest, const char *header, const char *data);
+int wurl_request_gz(const char * url, const char * dest, const char * header, const char * data);
+char * wurl_http_get(const char * url);
+
+/* Check download module availability */
+int wurl_check_connection();
 
 #endif /* CUSTOM_OUTPUT_SEARCH_H_ */

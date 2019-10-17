@@ -1,7 +1,8 @@
-/* Copyright (C) 2010 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2010 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -27,6 +28,7 @@
 #include <sys/wait.h>
 #include "check_cert.h"
 #include "os_crypto/md5/md5_op.h"
+#include "wazuhdb_op.h"
 
 /* Prototypes */
 static void help_authd(void) __attribute((noreturn));
@@ -366,6 +368,11 @@ int main(int argc, char **argv)
         }
     }
 
+    if (w_is_worker()) {
+        minfo("Cluster worker node: Disabling Authd daemon.");
+        exit(0);
+    }
+
     /* Start daemon -- NB: need to double fork and setsid */
     mdebug1(STARTED_MSG);
 
@@ -554,7 +561,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            pthread_mutex_lock(&mutex_pool);
+            w_mutex_lock(&mutex_pool);
 
             if (full(pool_i, pool_j)) {
                 merror("Too many connections. Rejecting.");
@@ -594,13 +601,11 @@ int main(int argc, char **argv)
 void* run_dispatcher(__attribute__((unused)) void *arg) {
     struct client client;
     char srcip[IPSIZE + 1];
-    char *agentname;
     int ret;
     int parseok;
     char *tmpstr;
     double antiquity;
     int acount;
-    char fname[2048];
     char response[2048];
     SSL *ssl;
     char *id_exist = NULL;
@@ -647,7 +652,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
 
         if (config.flags.verify_host && config.agent_ca) {
             if (check_x509_cert(ssl, srcip) != VERIFY_TRUE) {
-                merror("Unable to verify server certificate.");
+                merror("Unable to verify client certificate.");
                 SSL_free(ssl);
                 close(client.socket);
                 continue;
@@ -706,6 +711,8 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
 
         /* Checking for action A (add agent) */
         parseok = 0;
+
+        char *agentname = NULL;
         if (strncmp(tmpstr, "OSSEC A:'", 9) == 0) {
             agentname = tmpstr + 9;
             tmpstr += 9;
@@ -721,6 +728,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
         }
         tmpstr++;
 
+        char fname[2048];
         if (parseok == 0) {
             merror("Invalid request for new agent from: %s", srcip);
         } else {
@@ -759,73 +767,38 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 int valid = 0;
                 valid = w_validate_group_name(centralized_group);
 
-                switch(valid){
+                if(valid < 0) {
 
-                    case -6:
-                        merror("Invalid group name: %.255s... ,",centralized_group);
-                        snprintf(response, 2048, "ERROR: Invalid group name: %.255s... cannot start or end with ','\n\n", centralized_group);
-                        SSL_write(ssl, response, strlen(response));
-                        snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
-                        SSL_write(ssl, response, strlen(response));
-                        SSL_free(ssl);
-                        close(client.socket);
-                        free(buf);
-                        continue;
+                    merror("Invalid group name: %.255s... ,",centralized_group);
 
-                    case -5:
-                        merror("Invalid group name: %.255s... ,",centralized_group);
-                        snprintf(response, 2048, "ERROR: Invalid group name: %.255s... consecutive ',' are not allowed \n\n, ", centralized_group);
-                        SSL_write(ssl, response, strlen(response));
-                        snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
-                        SSL_write(ssl, response, strlen(response));
-                        SSL_free(ssl);
-                        close(client.socket);
-                        free(buf);
-                        continue;
+                    switch (valid) {
+                        case -6:
+                            snprintf(response, 2048, "ERROR: Invalid group name: %.255s... cannot start or end with ','\n\n", centralized_group);
+                            break;
+                        case -5:
+                            snprintf(response, 2048, "ERROR: Invalid group name: %.255s... consecutive ',' are not allowed \n\n, ", centralized_group);
+                            break;
+                        case -4:
+                            snprintf(response, 2048, "ERROR: Invalid group name: %.255s... white spaces are not allowed \n\n", centralized_group);
+                            break;
+                        case -3:
+                            snprintf(response, 2048, "ERROR: Invalid group name: %.255s... multigroup is too large \n\n", centralized_group);
+                            break;
+                        case -2:
+                            snprintf(response, 2048, "ERROR: Invalid group name: %.255s... group is too large\n\n", centralized_group);
+                            break;
+                        case -1:
+                            snprintf(response, 2048, "ERROR: Invalid group name: %.255s... characters '\\/:*?\"<>|,' are prohibited\n\n", centralized_group);
+                            break;
+                    }
 
-                    case -4:
-                        merror("Invalid group name: %.255s... ,",centralized_group);
-                        snprintf(response, 2048, "ERROR: Invalid group name: %.255s... white spaces are not allowed \n\n", centralized_group);
-                        SSL_write(ssl, response, strlen(response));
-                        snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
-                        SSL_write(ssl, response, strlen(response));
-                        SSL_free(ssl);
-                        close(client.socket);
-                        free(buf);
-                        continue;
-
-                    case -3:
-                        merror("Invalid group name: %.255s... ,",centralized_group);
-                        snprintf(response, 2048, "ERROR: Invalid group name: %.255s... multigroup is too large \n\n", centralized_group);
-                        SSL_write(ssl, response, strlen(response));
-                        snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
-                        SSL_write(ssl, response, strlen(response));
-                        SSL_free(ssl);
-                        close(client.socket);
-                        free(buf);
-                        continue;
-
-                    case -2:
-                        merror("Invalid group name: %.255s... ,",centralized_group);
-                        snprintf(response, 2048, "ERROR: Invalid group name: %.255s... group is too large\n\n", centralized_group);
-                        SSL_write(ssl, response, strlen(response));
-                        snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
-                        SSL_write(ssl, response, strlen(response));
-                        SSL_free(ssl);
-                        close(client.socket);
-                        free(buf);
-                        continue;
-
-                    case -1:
-                        merror("Invalid group name: %.255s... ,",centralized_group);
-                        snprintf(response, 2048, "ERROR: Invalid group name: %.255s... characters '\\/:*?\"<>|,' are prohibited\n\n", centralized_group);
-                        SSL_write(ssl, response, strlen(response));
-                        snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
-                        SSL_write(ssl, response, strlen(response));
-                        SSL_free(ssl);
-                        close(client.socket);
-                        free(buf);
-                        continue;
+                    SSL_write(ssl, response, strlen(response));
+                    snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
+                    SSL_write(ssl, response, strlen(response));
+                    SSL_free(ssl);
+                    close(client.socket);
+                    free(buf);
+                    continue;
                 }
 
                 if(!multigroup){
@@ -855,15 +828,15 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                     }
                     closedir(group_dir);
                 }else{
-                    char *multi_group_cpy = NULL;
-                    os_strdup(centralized_group, multi_group_cpy);
-
-                    char *group = strtok(centralized_group, delim);
                     int error = 0;
                     int max_multigroups = 0;
+                    char *groups_added;
 
+                    groups_added = wstr_delete_repeated_groups(centralized_group);
+                    mdebug1("Multigroup is: %s",groups_added);
+                    snprintf(centralized_group,OS_SIZE_65536,"%s",groups_added);
+                    char *group = strtok(groups_added, delim);
 
-                    mdebug1("Multigroup: '%s'",multi_group_cpy);
                     while( group != NULL ) {
                         DIR * dp;
                         char dir[PATH_MAX + 1] = {0};
@@ -933,8 +906,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                         closedir(dp);
                     }
 
-                    snprintf(centralized_group,OS_SIZE_65536,"%s",multi_group_cpy);
-                    free(multi_group_cpy);
+                    os_free(groups_added);
 
                     if(error){
                         free(buf);
@@ -986,6 +958,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                     if (config.flags.force_insert && (antiquity = OS_AgentAntiquity(keys.keyentries[index]->name, keys.keyentries[index]->ip->ip), antiquity >= config.force_time || antiquity < 0)) {
                         id_exist = keys.keyentries[index]->id;
                         minfo("Duplicated IP '%s' (%s). Saving backup.", srcip, id_exist);
+
                         OS_RemoveAgentGroup(id_exist);
                         add_backup(keys.keyentries[index]);
                         OS_DeleteKey(&keys, id_exist, 0);
@@ -1025,6 +998,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 if (config.flags.force_insert && (antiquity = OS_AgentAntiquity(keys.keyentries[index]->name, keys.keyentries[index]->ip->ip), antiquity >= config.force_time || antiquity < 0)) {
                     id_exist = keys.keyentries[index]->id;
                     minfo("Duplicated name '%s' (%s). Saving backup.", agentname, id_exist);
+
                     add_backup(keys.keyentries[index]);
                     OS_DeleteKey(&keys, id_exist, 0);
                 } else {
@@ -1142,6 +1116,8 @@ void* run_writer(__attribute__((unused)) void *arg) {
     struct keynode *cur;
     struct keynode *next;
     time_t cur_time;
+    char wdbquery[OS_SIZE_128];
+    char *wdboutput;
 
     authd_sigblock();
 
@@ -1179,6 +1155,8 @@ void* run_writer(__attribute__((unused)) void *arg) {
                 if(set_agent_group(cur->id,cur->group) == -1){
                     merror("Unable to set agent centralized group: %s (internal error)", cur->group);
                 }
+
+                set_agent_multigroup(cur->group);
             }
 
             free(cur->id);
@@ -1191,6 +1169,11 @@ void* run_writer(__attribute__((unused)) void *arg) {
         for (cur = copy_backup; cur; cur = next) {
             next = cur->next;
             OS_BackupAgentInfo(cur->id, cur->name, cur->ip);
+
+            snprintf(wdbquery, OS_SIZE_128, "agent %s remove", cur->id);
+            wdb_send_query(wdbquery, &wdboutput);
+            os_free(wdboutput);
+
             free(cur->id);
             free(cur->name);
             free(cur->ip);
@@ -1205,6 +1188,11 @@ void* run_writer(__attribute__((unused)) void *arg) {
             OS_RemoveCounter(cur->id);
             OS_RemoveAgentTimestamp(cur->id);
             OS_RemoveAgentGroup(cur->id);
+
+            snprintf(wdbquery, OS_SIZE_128, "agent %s remove", cur->id);
+            wdb_send_query(wdbquery, &wdboutput);
+            os_free(wdboutput);
+
             free(cur->id);
             free(cur->name);
             free(cur->ip);
@@ -1262,7 +1250,7 @@ void add_remove(const keyentry *entry) {
 #ifdef __hpux
 char* strsignal(int sig)
 {
-    char str[12];
+    static char str[12];
     sprintf(str, "%d", sig);
     return str;
 }

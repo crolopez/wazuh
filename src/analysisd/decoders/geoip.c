@@ -1,10 +1,11 @@
 /* @(#) $Id: ./src/analysisd/decoders/geoip.c, 2014/03/08 dcid Exp $
  */
 
-/* Copyright (C) 2014 Daniel Cid
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2014 Daniel Cid
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation

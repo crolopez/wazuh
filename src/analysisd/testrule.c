@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -27,6 +28,7 @@
 #include "analysisd.h"
 #include "fts.h"
 #include "cleanevent.h"
+#include "lists_make.h"
 
 /** Internal Functions **/
 void OS_ReadMSG(char *ut_str);
@@ -219,12 +221,26 @@ int main(int argc, char **argv)
             if (!Config.decoders) {
                 /* Legacy loading */
                 /* Read decoders */
-                if (!ReadDecodeXML("etc/decoder.xml")) {
-                    merror_exit(CONFIG_ERROR,  XML_DECODER);
+                Read_Rules(NULL, &Config, NULL);
+
+                /* New loaded based on file specified in ossec.conf */
+                char **decodersfiles;
+                decodersfiles = Config.decoders;
+                while ( decodersfiles && *decodersfiles) {
+                    if (!test_config) {
+                        mdebug1("Reading decoder file %s.", *decodersfiles);
+                    }
+                    if (!ReadDecodeXML(*decodersfiles)) {
+                        merror_exit(CONFIG_ERROR, *decodersfiles);
+                    }
+
+                    free(*decodersfiles);
+                    decodersfiles++;
                 }
 
                 /* Read local ones */
-                c = ReadDecodeXML("etc/local_decoder.xml");
+
+                c = ReadDecodeXML(XML_LDECODER);
                 if (!c) {
                     if ((c != -2)) {
                         merror_exit(CONFIG_ERROR,  XML_LDECODER);
@@ -232,6 +248,7 @@ int main(int argc, char **argv)
                 } else {
                     minfo("Reading local decoder file.");
                 }
+
             } else {
                 /* New loaded based on file specified in ossec.conf */
                 char **decodersfiles;
@@ -272,6 +289,7 @@ int main(int argc, char **argv)
                 free(Config.lists);
                 Config.lists = NULL;
             }
+            Lists_OP_MakeAll(0, 0);
         }
         {
             /* Load Rules */

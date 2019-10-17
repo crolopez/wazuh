@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -9,8 +10,10 @@
 
 /* os_xml C Library */
 
-#ifndef __OS_XML_H
-#define __OS_XML_H
+#ifndef OS_XML_H
+#define OS_XML_H
+
+#include <stdio.h>
 
 /* XML Node structure */
 typedef struct _xml_node {
@@ -23,6 +26,7 @@ typedef struct _xml_node {
 
 #define XML_ERR_LENGTH  128
 #define XML_STASH_LEN   2
+#define xml_getc_fun(x,y) (x)? _xml_fgetc(x,y) : _xml_sgetc(y)
 typedef enum _XML_TYPE { XML_ATTR, XML_ELEM, XML_VARIABLE_BEGIN = '$' } XML_TYPE;
 
 /* XML structure */
@@ -40,12 +44,20 @@ typedef struct _OS_XML {
     unsigned int line;          /* Current line */
     char stash[XML_STASH_LEN];  /* Ungot characters stash */
     int stash_i;                /* Stash index */
+    FILE *fp;                   /* File descriptor */
+    char *string;               /* XML string */
 } OS_XML;
 
 typedef xml_node **XML_NODE;
 
 /* Start the XML structure reading a file */
 int OS_ReadXML(const char *file, OS_XML *lxml) __attribute__((nonnull));
+
+/* Start the XML structure reading a string */
+int OS_ReadXMLString(const char *string, OS_XML *_lxml) __attribute__((nonnull));
+
+/* Parse the XML */
+int ParseXML(OS_XML *_lxml) __attribute__((nonnull));
 
 /* Clear the XML structure memory */
 void OS_ClearXML(OS_XML *_lxml) __attribute__((nonnull));
@@ -96,4 +108,4 @@ int OS_ApplyVariables(OS_XML *_lxml) __attribute__((nonnull));
 int OS_WriteXML(const char *infile, const char *outfile, const char **nodes,
                 const char *oldval, const char *newval) __attribute__((nonnull(1, 2, 3, 5)));
 
-#endif /* __OS_XML_H */
+#endif /* OS_XML_H */

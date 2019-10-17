@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -66,7 +67,7 @@ int OS_CleanMSG(char *msg, Eventinfo *lf)
      * repair to only one slot so we can detect the correct date format in the next step
      * ex: Mär 02 17:30:52
      */
-    if (pieces[1] == (char) 195) {
+    if (loglen >= 3 && pieces[1] == (char) 195) {
         if (pieces[2] == (char) 164) {
             pieces[0] = '\0';
             pieces[1] = 'M';
@@ -116,7 +117,9 @@ int OS_CleanMSG(char *msg, Eventinfo *lf)
                  (pieces[25] == ' ') && (lf->log += 26)) ||
 
                 ((pieces[19] == '.') &&
-                 (pieces[29] == ':') && (lf->log += 32))
+                 (pieces[29] == ':') && (lf->log += 33))  ||
+
+                ((pieces[19] == '.') && (lf->log += 32))
             )
         )
      ||

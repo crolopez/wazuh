@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -18,6 +19,7 @@
 #include "os_net/os_net.h"
 #include "os_execd/execd.h"
 #include "os_crypto/md5/md5_op.h"
+#include "external/cJSON/cJSON.h"
 
 #ifndef ARGV0
 #define ARGV0 "ossec-agent"
@@ -52,7 +54,7 @@ void agent_help()
 /* syscheck main thread */
 void *skthread()
 {
-    minfo("Starting syscheckd thread.");
+    minfo("Starting file integrity monitoring thread.");
 
     Start_win32_Syscheck();
 
@@ -87,7 +89,9 @@ int main(int argc, char **argv)
         mypath[0] = '.';
         mypath[1] = '\0';
     }
-    chdir(mypath);
+    if (chdir(mypath) < 0) {
+        merror_exit(CHDIR_ERROR, mypath, errno, strerror(errno));
+    }
     getcwd(mypath, OS_MAXSTR - 1);
     snprintf(myfinalpath, OS_MAXSTR, "\"%s\\%s\"", mypath, myfile);
 
@@ -122,6 +126,7 @@ int main(int argc, char **argv)
 int local_start()
 {
     int debug_level;
+    int rc;
     char *cfg = DEFAULTCPATH;
     WSADATA wsaData;
     DWORD  threadID;
@@ -156,6 +161,12 @@ int local_start()
     if (ClientConf(cfg) < 0) {
         merror_exit(CLIENT_ERROR);
     }
+
+    if (!Validate_Address(agt->server)){
+        merror(AG_INV_MNGIP, agt->server[0].rip);
+        merror_exit(CLIENT_ERROR);
+    }
+
     if (agt->notify_time == 0) {
         agt->notify_time = NOTIFY_TIME;
     }
@@ -167,6 +178,17 @@ int local_start()
         minfo("Max time to reconnect can't be less than notify_time(%d), using notify_time*3 (%d)", agt->notify_time, agt->max_time_reconnect_try);
     }
     minfo("Using notify time: %d and max time to reconnect: %d", agt->notify_time, agt->max_time_reconnect_try);
+
+    // Resolve hostnames
+    rc = 0;
+    while (rc < agt->rip_id) {
+        if (OS_IsValidIP(agt->server[rc].rip, NULL) != 1) {
+            mdebug2("Resolving server hostname: %s", agt->server[rc].rip);
+            resolveHostname(&agt->server[rc].rip, 5);
+            mdebug2("Server hostname resolved: %s", agt->server[rc].rip);
+        }
+        rc++;
+    }
 
     /* Read logcollector config file */
     mdebug1("Reading logcollector configuration.");
@@ -216,6 +238,9 @@ int local_start()
         agt->execdq = -1;
     }
 
+    /* Initialize sender */
+    sender_init();
+
     /* Read keys */
     minfo(ENC_READ);
 
@@ -230,15 +255,16 @@ int local_start()
     srandom(time(0));
     os_random();
 
+    // Initialize children pool
+    wm_children_pool_init();
+
     /* Launch rotation thread */
-    if (CreateThread(NULL,
+    w_create_thread(NULL,
                      0,
                      (LPTHREAD_START_ROUTINE)state_main,
                      NULL,
                      0,
-                     (LPDWORD)&threadID) == NULL) {
-        merror(THREAD_ERROR);
-    }
+                     (LPDWORD)&threadID);
 
     /* Socket connection */
     agt->sock = -1;
@@ -253,36 +279,30 @@ int local_start()
     /* Start buffer thread */
     if (agt->buffer){
         buffer_init();
-        if (CreateThread(NULL,
+        w_create_thread(NULL,
                          0,
                          (LPTHREAD_START_ROUTINE)dispatch_buffer,
                          NULL,
                          0,
-                         (LPDWORD)&threadID) == NULL) {
-            merror(THREAD_ERROR);
-        }
+                         (LPDWORD)&threadID);
     }else{
         minfo(DISABLED_BUFFER);
     }
     /* Start syscheck thread */
-    if (CreateThread(NULL,
+    w_create_thread(NULL,
                      0,
                      (LPTHREAD_START_ROUTINE)skthread,
                      NULL,
                      0,
-                     (LPDWORD)&threadID) == NULL) {
-        merror(THREAD_ERROR);
-    }
+                     (LPDWORD)&threadID);
 
     /* Launch rotation thread */
-    if (CreateThread(NULL,
+    w_create_thread(NULL,
                      0,
                      (LPTHREAD_START_ROUTINE)w_rotate_log_thread,
                      NULL,
                      0,
-                     (LPDWORD)&threadID) == NULL) {
-        merror(THREAD_ERROR);
-    }
+                     (LPDWORD)&threadID);
 
     /* Check if server is connected */
     os_setwait();
@@ -297,24 +317,20 @@ int local_start()
     req_init();
 
     /* Start receiver thread */
-    if (CreateThread(NULL,
+    w_create_thread(NULL,
                      0,
                      (LPTHREAD_START_ROUTINE)receiver_thread,
                      NULL,
                      0,
-                     (LPDWORD)&threadID2) == NULL) {
-        merror(THREAD_ERROR);
-    }
+                     (LPDWORD)&threadID2);
 
     /* Start request receiver thread */
-    if (CreateThread(NULL,
+    w_create_thread(NULL,
                      0,
                      (LPTHREAD_START_ROUTINE)req_receiver,
                      NULL,
                      0,
-                     (LPDWORD)&threadID2) == NULL) {
-        merror(THREAD_ERROR);
-    }
+                     (LPDWORD)&threadID2);
 
     // Read wodle configuration and start modules
 
@@ -322,14 +338,12 @@ int local_start()
         wmodule * cur_module;
 
         for (cur_module = wmodules; cur_module; cur_module = cur_module->next) {
-            if (CreateThread(NULL,
+            w_create_thread(NULL,
                             0,
                             (LPTHREAD_START_ROUTINE)cur_module->context->start,
                             cur_module->data,
                             0,
-                            (LPDWORD)&threadID2) == NULL) {
-                merror(THREAD_ERROR);
-            }
+                            (LPDWORD)&threadID2);
         }
     }
 
@@ -364,7 +378,7 @@ int SendMSG(__attribute__((unused)) int queue, const char *message, const char *
         if (dwWaitResult != WAIT_OBJECT_0) {
             switch (dwWaitResult) {
                 case WAIT_TIMEOUT:
-                    merror("Error waiting mutex (timeout).");
+                    mdebug2("Sending mutex timeout.");
                     sleep(5);
                     continue;
                 case WAIT_ABANDONED:
@@ -465,7 +479,7 @@ int SendMSG(__attribute__((unused)) int queue, const char *message, const char *
                     }
                 }
 
-                minfo(AG_CONNECTED, agt->server[agt->rip_id].rip, agt->server[agt->rip_id].port, agt->server[agt->rip_id].protocol == UDP_PROTO ? "udp" : "tcp");
+                minfo(AG_CONNECTED, agt->server[agt->rip_id].rip, agt->server[agt->rip_id].port, agt->server[agt->rip_id].protocol == IPPROTO_UDP ? "udp" : "tcp");
                 minfo(SERVER_UP);
                 update_status(GA_STATUS_ACTIVE);
             }
@@ -517,11 +531,170 @@ int StartMQ(__attribute__((unused)) const char *path, __attribute__((unused)) sh
     return (0);
 }
 
+char *get_win_agent_ip(){
+
+    typedef char* (*CallFunc)(PIP_ADAPTER_ADDRESSES pCurrAddresses, int ID, char * timestamp);
+
+    char *agent_ip = NULL;
+    int min_metric = INT_MAX;
+
+    static HMODULE sys_library = NULL;
+    static CallFunc _get_network_vista = NULL;
+
+
+    ULONG flags = (checkVista() ? (GAA_FLAG_INCLUDE_PREFIX | GAA_FLAG_INCLUDE_GATEWAYS) : 0);
+
+    PIP_ADAPTER_ADDRESSES pAddresses = NULL;
+    ULONG outBufLen = 0;
+    ULONG Iterations = 0;
+    DWORD dwRetVal = 0;
+
+    PIP_ADAPTER_ADDRESSES pCurrAddresses = NULL;
+
+    PIP_ADAPTER_INFO AdapterInfo = NULL;
+
+    /* Allocate a 15 KB buffer to start with */
+    outBufLen = WORKING_BUFFER_SIZE;
+
+    do {
+        pAddresses = (IP_ADAPTER_ADDRESSES *) win_alloc(outBufLen);
+
+        if (pAddresses == NULL) {
+            mterror_exit(WM_SYS_LOGTAG, "Memory allocation failed for IP_ADAPTER_ADDRESSES struct.");
+        }
+
+        dwRetVal = GetAdaptersAddresses(AF_UNSPEC, flags, NULL, pAddresses, &outBufLen);
+
+        if (dwRetVal == ERROR_BUFFER_OVERFLOW) {
+            win_free(pAddresses);
+            pAddresses = NULL;
+        } else {
+            break;
+        }
+
+        Iterations++;
+    } while ((dwRetVal == ERROR_BUFFER_OVERFLOW) && (Iterations < MAX_TRIES));
+
+    if (dwRetVal == NO_ERROR) {
+        if (!checkVista()) {
+            /* Retrieve additional data from IPv4 interfaces using GetAdaptersInfo() (under XP) */
+            Iterations = 0;
+            outBufLen = WORKING_BUFFER_SIZE;
+
+            do {
+                AdapterInfo = (IP_ADAPTER_INFO *) win_alloc(outBufLen);
+
+                if (AdapterInfo == NULL) {
+                    mterror_exit(WM_SYS_LOGTAG, "Memory allocation failed for IP_ADAPTER_INFO struct.");
+                }
+
+                dwRetVal = GetAdaptersInfo(AdapterInfo, &outBufLen);
+
+                if (dwRetVal == ERROR_BUFFER_OVERFLOW) {
+                    win_free(AdapterInfo);
+                    AdapterInfo = NULL;
+                } else {
+                    break;
+                }
+
+                Iterations++;
+            } while ((dwRetVal == ERROR_BUFFER_OVERFLOW) && (Iterations < MAX_TRIES));
+        } else {
+            if (!sys_library) {
+                sys_library = LoadLibrary("syscollector_win_ext.dll");
+            }
+
+            if (sys_library && !_get_network_vista) {
+                if (_get_network_vista = (CallFunc)GetProcAddress(sys_library, "get_network_vista"), !_get_network_vista) {
+                    dwRetVal = GetLastError();
+                    mterror(WM_SYS_LOGTAG, "Unable to access 'get_network_vista' on syscollector_win_ext.dll.");
+                    goto end;
+                }
+            }
+        }
+
+        if (dwRetVal == NO_ERROR) {
+            pCurrAddresses = pAddresses;
+            while (pCurrAddresses) {
+                char *string;
+                /* Ignore Loopback interface */
+                if (pCurrAddresses->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+                    pCurrAddresses = pCurrAddresses->Next;
+                    continue;
+                }
+
+                /* Ignore interfaces without valid IPv4 indexes */
+                if (pCurrAddresses->IfIndex == 0) {
+                    pCurrAddresses = pCurrAddresses->Next;
+                    continue;
+                }
+
+                if (checkVista()) {
+                    if (!sys_library) {
+                        merror("Could not load library 'syscollector_win_ext.dll'");
+                        goto end;
+                    }
+
+                    /* Call function get_network_vista() in syscollector_win_ext.dll */
+                    string = _get_network_vista(pCurrAddresses, 0, NULL);
+                } else {
+                    /* Call function get_network_xp() */
+                    string = get_network_xp(pCurrAddresses, AdapterInfo, 0, NULL);
+                }
+
+                const char *jsonErrPtr;
+                cJSON *object = cJSON_ParseWithOpts(string, &jsonErrPtr, 0);
+                cJSON *iface = cJSON_GetObjectItem(object, "iface");
+                cJSON *ipv4 = cJSON_GetObjectItem(iface, "IPv4");
+                if(ipv4){
+                    cJSON * gateway = cJSON_GetObjectItem(ipv4, "gateway");
+                    if (gateway) {
+                        if(checkVista()){
+                            cJSON * metric = cJSON_GetObjectItem(ipv4, "metric");
+                            if (metric && metric->valueint < min_metric) {
+                                cJSON *addresses = cJSON_GetObjectItem(ipv4, "address");
+                                cJSON *address = cJSON_GetArrayItem(addresses,0);
+                                free(agent_ip);
+                                os_strdup(address->valuestring, agent_ip);
+                                min_metric = metric->valueint;
+                            }
+                        }
+                        else{
+                            cJSON *addresses = cJSON_GetObjectItem(ipv4, "address");
+                            cJSON *address = cJSON_GetArrayItem(addresses,0);
+                            free(agent_ip);
+                            os_strdup(address->valuestring, agent_ip);
+                            free(string);
+                            cJSON_Delete(object);
+                            break;
+                        }
+                    }
+                }
+                free(string);
+                cJSON_Delete(object);
+                pCurrAddresses = pCurrAddresses->Next;
+            }
+        }
+    }
+
+end:
+
+    if (pAddresses) {
+        win_free((HLOCAL)pAddresses);
+    }
+
+    return agent_ip;
+}
+
 /* Send win32 info to server */
 void send_win32_info(time_t curr_time)
 {
     char tmp_msg[OS_MAXSTR - OS_HEADER_SIZE + 2];
     char tmp_labels[OS_MAXSTR - OS_HEADER_SIZE] = { '\0' };
+    char *agent_ip;
+    char label_ip[60];
+
+    agent_ip = get_win_agent_ip();
 
     tmp_msg[OS_MAXSTR - OS_HEADER_SIZE + 1] = '\0';
 
@@ -569,15 +742,34 @@ void send_win32_info(time_t curr_time)
     }
 
     /* Create message */
-    if (File_DateofChange(AGENTCONFIGINT) > 0) {
-        os_md5 md5sum;
-        if (OS_MD5_File(AGENTCONFIGINT, md5sum, OS_TEXT) != 0) {
-            snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s\n%s%s", __win32_uname, tmp_labels, __win32_shared);
+    if(agent_ip){
+        snprintf(label_ip,sizeof label_ip,"#\"_agent_ip\":%s",agent_ip);
+        /* In case there is an agent IP the message has a new line at the end to emulate the random string generated in Linux agents
+           to avoid the delete of the agent IP */
+        if (File_DateofChange(AGENTCONFIGINT) > 0) {
+            os_md5 md5sum;
+            if (OS_MD5_File(AGENTCONFIGINT, md5sum, OS_TEXT) != 0) {
+                snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s\n%s%s%s\n", __win32_uname, tmp_labels, __win32_shared, label_ip);
+            } else {
+                snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s / %s\n%s%s%s\n", __win32_uname, md5sum, tmp_labels, __win32_shared, label_ip);
+            }
         } else {
-            snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s / %s\n%s%s", __win32_uname, md5sum, tmp_labels, __win32_shared);
+            snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s\n%s%s%s\n", __win32_uname, tmp_labels, __win32_shared, label_ip);
         }
-    } else {
-        snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s\n%s%s", __win32_uname, tmp_labels, __win32_shared);
+
+        free(agent_ip);
+    }
+    else{
+        if (File_DateofChange(AGENTCONFIGINT) > 0) {
+            os_md5 md5sum;
+            if (OS_MD5_File(AGENTCONFIGINT, md5sum, OS_TEXT) != 0) {
+                snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s\n%s%s", __win32_uname, tmp_labels, __win32_shared);
+            } else {
+                snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s / %s\n%s%s", __win32_uname, md5sum, tmp_labels, __win32_shared);
+            }
+        } else {
+            snprintf(tmp_msg, OS_MAXSTR - OS_HEADER_SIZE, "#!-%s\n%s%s", __win32_uname, tmp_labels, __win32_shared);
+        }
     }
 
     /* Create message */

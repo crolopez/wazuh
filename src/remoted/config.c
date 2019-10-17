@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -26,9 +27,13 @@ int request_timeout;
 int response_timeout;
 int INTERVAL;
 rlim_t nofile;
-unsigned int _s_comp_print;
-unsigned int _s_recv_flush;
-int _s_verify_counter;
+int guess_agent_group;
+int group_data_flush;
+unsigned receive_chunk;
+int buffer_relax;
+int tcp_keepidle;
+int tcp_keepintvl;
+int tcp_keepcnt;
 
 /* Read the config file (the remote access) */
 int RemotedConfig(const char *cfgfile, remoted *cfg)
@@ -43,6 +48,9 @@ int RemotedConfig(const char *cfgfile, remoted *cfg)
     cfg->denyips = NULL;
     cfg->nocmerged = 0;
     cfg->queue_size = 131072;
+
+    receive_chunk = (unsigned)getDefine_Int("remoted", "receive_chunk", 1024, 16384);
+    buffer_relax = getDefine_Int("remoted", "buffer_relax", 0, 2);
 
     if (ReadConfig(modules, cfgfile, cfg, NULL) < 0) {
         return (OS_INVALID);
@@ -88,8 +96,8 @@ cJSON *getRemoteConfig(void) {
             else if (logr.conn[i] == SECURE_CONN) cJSON_AddStringToObject(conn,"connection","secure");
             if (logr.ipv6 && logr.ipv6[i]) cJSON_AddStringToObject(conn,"ipv6","yes"); else cJSON_AddStringToObject(conn,"ipv6","no");
             if (logr.lip && logr.lip[i]) cJSON_AddStringToObject(conn,"local_ip",logr.lip[i]);
-            if (logr.proto && logr.proto[i] == UDP_PROTO) cJSON_AddStringToObject(conn,"protocol","udp");
-            else if (logr.proto && logr.proto[i] == TCP_PROTO) cJSON_AddStringToObject(conn,"protocol","tcp");
+            if (logr.proto && logr.proto[i] == IPPROTO_UDP) cJSON_AddStringToObject(conn,"protocol","udp");
+            else if (logr.proto && logr.proto[i] == IPPROTO_TCP) cJSON_AddStringToObject(conn,"protocol","tcp");
             if (logr.port && logr.port[i]){
                 sprintf(port,"%d",logr.port[i]);
                 cJSON_AddStringToObject(conn,"port",port);
@@ -142,6 +150,13 @@ cJSON *getRemoteInternalConfig(void) {
     cJSON_AddNumberToObject(remoted,"shared_reload",INTERVAL);
     cJSON_AddNumberToObject(remoted,"rlimit_nofile",nofile);
     cJSON_AddNumberToObject(remoted,"merge_shared",logr.nocmerged);
+    cJSON_AddNumberToObject(remoted,"guess_agent_group",guess_agent_group);
+    cJSON_AddNumberToObject(remoted,"group_data_flush",group_data_flush);
+    cJSON_AddNumberToObject(remoted,"receive_chunk",receive_chunk);
+    cJSON_AddNumberToObject(remoted,"buffer_relax",buffer_relax);
+    cJSON_AddNumberToObject(remoted,"tcp_keepidle",tcp_keepidle);
+    cJSON_AddNumberToObject(remoted,"tcp_keepintvl",tcp_keepintvl);
+    cJSON_AddNumberToObject(remoted,"tcp_keepcnt",tcp_keepcnt);
 
     cJSON_AddItemToObject(internals,"remoted",remoted);
     cJSON_AddItemToObject(root,"internal",internals);

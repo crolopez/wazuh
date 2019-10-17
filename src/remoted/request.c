@@ -1,8 +1,8 @@
 /* Remote request listener
- * Copyright (C) 2017 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * May 31, 2017.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -41,6 +41,7 @@ int max_attempts;
 int request_pool;
 int request_timeout;
 int response_timeout;
+int guess_agent_group;
 
 // Request listener thread entry point
 void * req_main(__attribute__((unused)) void * arg) {
@@ -61,6 +62,7 @@ void * req_main(__attribute__((unused)) void * arg) {
     rto_sec = getDefine_Int("remoted", "request_rto_sec", 0, 60);
     rto_msec = getDefine_Int("remoted", "request_rto_msec", 0, 999);
     max_attempts = getDefine_Int("remoted", "max_attempts", 1, 16);
+    guess_agent_group = getDefine_Int("remoted", "guess_agent_group", 0, 1);
 
     // Create hash table
 
@@ -118,6 +120,10 @@ void * req_main(__attribute__((unused)) void * arg) {
 
         os_calloc(OS_MAXSTR, sizeof(char), buffer);
         switch (length = OS_RecvSecureTCP(peer, buffer,OS_MAXSTR), length) {
+        case OS_SOCKTERR:
+            merror("OS_RecvSecureTCP(): Too big message size received from an internal component.");
+            free(buffer);
+            break;
         case -1:
             merror("OS_RecvSecureTCP(): %s", strerror(errno));
             free(buffer);
@@ -247,7 +253,7 @@ void * req_dispatch(req_node_t * node) {
 
             // Wait for ACK or response, only in UDP mode
 
-            if (logr.proto[logr.position] == UDP_PROTO) {
+            if (logr.proto[logr.position] == IPPROTO_UDP) {
                 gettimeofday(&now, NULL);
                 nsec = now.tv_usec * 1000 + rto_msec * 1000000;
                 timeout.tv_sec = now.tv_sec + rto_sec + nsec / 1000000000;
@@ -298,7 +304,7 @@ void * req_dispatch(req_node_t * node) {
 
         // Send ACK, only in UDP mode
 
-        if (logr.proto[logr.position] == UDP_PROTO) {
+        if (logr.proto[logr.position] == IPPROTO_UDP) {
             // Example: #!-req 16 ack
             mdebug2("req_dispatch(): Sending ack (%s).", node->counter);
             snprintf(response, REQ_RESPONSE_LENGTH, CONTROL_HEADER HC_REQUEST "%s ack", node->counter);
@@ -306,8 +312,9 @@ void * req_dispatch(req_node_t * node) {
         }
 
         // Send response to local peer
-
-        mdebug2("Sending response: '%s'", node->buffer);
+        if (node->buffer) {
+            mdebug2("Sending response: '%s'", node->buffer);
+        }
 
         if (OS_SendSecureTCP(node->sock, node->length, node->buffer) != 0) {
             mwarn("At req_dispatch(): OS_SendSecureTCP(): %s", strerror(errno));
@@ -414,7 +421,7 @@ size_t rem_getconfig(const char * section, char ** output) {
             json_str = cJSON_PrintUnformatted(cfg);
             wm_strcat(output, json_str, ' ');
             free(json_str);
-            cJSON_free(cfg);
+            cJSON_Delete(cfg);
             return strlen(*output);
         } else {
             goto error;
@@ -425,7 +432,7 @@ size_t rem_getconfig(const char * section, char ** output) {
             json_str = cJSON_PrintUnformatted(cfg);
             wm_strcat(output, json_str, ' ');
             free(json_str);
-            cJSON_free(cfg);
+            cJSON_Delete(cfg);
             return strlen(*output);
         } else {
             goto error;

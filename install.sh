@@ -1,19 +1,7 @@
 #!/bin/sh
-# Installation script for the OSSEC
+# Copyright (C) 2015-2019, Wazuh Inc.
+# Installation script for Wazuh
 # Author: Daniel B. Cid <daniel.cid@gmail.com>
-# Last modification: Nov 25, 2016
-
-# Changelog 19/03/2006 - Rafael M. Capovilla <under@underlinux.com.br>
-# New function AddWhite to allow users to add more Ips in the white_list
-# Minor *echos* modifications to better look
-# Bug fix - When email address is blank
-# Bug fix - delete INSTALLDIR - Default is yes but if the user just press enter the script wasn't deleting it as it should
-# Changelog 15/07/2006 - Rafael M. Capovilla <under@underlinux.com.br>
-# New function AddTable to add support for OpenBSD pf rules in firewall-drop active response
-
-# Changelog 29 March 2012 - Adding hybrid mode (standalone + agent)
-# Changelog 25 November 2016 - Added OpenSCAP, new file generating functions using templates.
-
 
 ### Looking up for the execution directory
 cd `dirname $0`
@@ -25,6 +13,8 @@ hs=`echo -n "a"`
 if [ ! "X$hs" = "Xa" ]; then
     if [ -x /usr/ucb/echo ]; then
         ECHO="/usr/ucb/echo -n"
+    elif [ -x /bin/echo ]; then
+        ECHO="/bin/echo -n"
     else
         ECHO=echo
     fi
@@ -97,13 +87,14 @@ Install()
     OS_VERSION_FOR_SYSC="${DIST_NAME}"
     if ([ "X${OS_VERSION_FOR_SYSC}" = "Xrhel" ] || [ "X${OS_VERSION_FOR_SYSC}" = "Xcentos" ]) && [ ${DIST_VER} -le 5 ]; then
         AUDIT_FLAG="USE_AUDIT=no"
+        MSGPACK_FLAG="USE_MSGPACK_OPT=no"
         if [ ${DIST_VER} -lt 5 ]; then
-            SYSC_FLAG="DISABLE_SYSC=true"
+            SYSC_FLAG="DISABLE_SYSC=yes"
         fi
     fi
 
     if [ "X${OS_VERSION_FOR_SYSC}" = "XAIX" ]; then
-        SYSC_FLAG="DISABLE_SYSC=true"
+        SYSC_FLAG="DISABLE_SYSC=yes"
     fi
 
     # Build SQLite library for CentOS 6
@@ -120,11 +111,15 @@ Install()
     # Binary install will use the previous generated code.
     if [ "X${USER_BINARYINSTALL}" = "X" ]; then
         # Download external libraries if missing
-        find external/* > /dev/null 2>&1 || ${MAKEBIN} deps
+        find external/* > /dev/null 2>&1 || ${MAKEBIN} deps PREFIX=${INSTALLDIR}
+
+        if [ "X${OPTIMIZE_CPYTHON}" = "Xy" ]; then
+            CPYTHON_FLAGS="OPTIMIZE_CPYTHON=yes"
+        fi
 
         # Add DATABASE=pgsql or DATABASE=mysql to add support for database
         # alert entry
-        ${MAKEBIN} PREFIX=${INSTALLDIR} TARGET=${INSTYPE} ${SYSC_FLAG} ${AUDIT_FLAG} ${LIB_FLAG} -j${THREADS} build
+        ${MAKEBIN} PREFIX=${INSTALLDIR} TARGET=${INSTYPE} ${SYSC_FLAG} ${MSGPACK_FLAG} ${AUDIT_FLAG} ${LIB_FLAG} ${CPYTHON_FLAGS} -j${THREADS} build
 
         if [ $? != 0 ]; then
             cd ../
@@ -164,11 +159,6 @@ Install()
         UpdateOldVersions
         echo "Starting Wazuh..."
         UpdateStartOSSEC
-    fi
-
-    # Enable auth if selected
-    if [ "X$INSTYPE" = "Xserver" ] && [ "X${AUTHD}" = "Xyes" ]; then
-        $INSTALLDIR/bin/ossec-control enable auth
     fi
 
     # Calling the init script  to start ossec hids during boot
@@ -270,6 +260,24 @@ UseSyscollector()
      fi
 }
 
+UseSecurityConfigurationAssessment()
+{
+    # Configuration assessment config predefined (is overwritten by the preload-vars file)
+    if [ "X${USER_ENABLE_SCA}" = "Xn" ]; then
+        SECURITY_CONFIGURATION_ASSESSMENT="no"
+     else
+        SECURITY_CONFIGURATION_ASSESSMENT="yes"
+     fi
+}
+
+UseSSLCert()
+{
+    if [ "X${USER_CREATE_SSL_CERT}" = "Xn" ]; then
+        SSL_CERT="no"
+    else
+        SSL_CERT="yes"
+    fi
+}
 
 ##########
 # EnableAuthd()
@@ -279,7 +287,7 @@ EnableAuthd()
     # Authd config
     NB=$1
     echo ""
-    $ECHO "  $NB - ${runauthd} ($yes/$no) [$no]: "
+    $ECHO "  $NB - ${runauthd} ($yes/$no) [$yes]: "
     if [ "X${USER_ENABLE_AUTHD}" = "X" ]; then
         read AS
     else
@@ -287,13 +295,13 @@ EnableAuthd()
     fi
     echo ""
     case $AS in
-        $yesmatch)
-            AUTHD="yes"
-            echo "   - ${yesrunauthd}."
-            ;;
-        *)
+        $nomatch)
             AUTHD="no"
             echo "   - ${norunauthd}."
+            ;;
+        *)
+            AUTHD="yes"
+            echo "   - ${yesrunauthd}."
             ;;
     esac
 }
@@ -393,6 +401,8 @@ ConfigureClient()
     UseOpenSCAP
 
     UseSyscollector
+
+    UseSecurityConfigurationAssessment
 
     echo ""
     $ECHO "  3.5 - ${enable_ar} ($yes/$no) [$yes]: "
@@ -527,6 +537,8 @@ ConfigureServer()
 
     UseSyscollector
 
+    UseSecurityConfigurationAssessment
+
     # Active response
     catMsg "0x107-ar"
 
@@ -567,6 +579,8 @@ ConfigureServer()
       # Configuring remote connections
       SLOG="yes"
     fi
+
+    UseSSLCert
 
     # Setting up the auth daemon & logs
     if [ "X$INSTYPE" = "Xserver" ]; then
@@ -1129,6 +1143,10 @@ if [ "x$HYBID" = "xgo" ]; then
     echo 'USER_ENABLE_OPENSCAP="n"' >> ./etc/preloaded-vars.conf
     echo "" >> ./etc/preloaded-vars.conf
     echo 'USER_ENABLE_SYSCOLLECTOR="n"' >> ./etc/preloaded-vars.conf
+    echo "" >> ./etc/preloaded-vars.conf
+    echo 'USER_ENABLE_SCA="n"' >> ./etc/preloaded-vars.conf
+    echo "" >> ./etc/preloaded-vars.conf
+    echo 'USER_CREATE_SSL_CERT="n"' >> ./etc/preloaded-vars.conf
     echo "" >> ./etc/preloaded-vars.conf
     echo 'USER_ENABLE_ACTIVE_RESPONSE="n"' >> ./etc/preloaded-vars.conf
     echo "" >> ./etc/preloaded-vars.conf

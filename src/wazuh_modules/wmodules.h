@@ -1,9 +1,9 @@
 /*
  * Wazuh Module Manager
- * Copyright (C) 2016 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * April 22, 2016.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -16,8 +16,8 @@
 #define ARGV0 "wazuh-modulesd"
 #endif // ARGV0
 
-#include <pthread.h>
 #include "shared.h"
+#include <pthread.h>
 #include "config/config.h"
 
 #define WM_DEFAULT_DIR  DEFAULTDIR "/wodles"        // Default modules directory.
@@ -33,12 +33,19 @@
 #define WM_ERROR_TIMEOUT 1                          // Error code for timeout.
 #define WM_POOL_SIZE    8                           // Child process pool size.
 #define WM_HEADER_SIZE  OS_SIZE_2048
+#define VU_WM_NAME "vulnerability-detector"
+#define AZ_WM_NAME "azure-logs"
+#define KEY_WM_NAME "agent-key-polling"
+#define SCA_WM_NAME "sca"
+#define FLUENT_WM_NAME "fluent-forward"
 
 #define WM_DEF_TIMEOUT      1800            // Default runtime limit (30 minutes)
 #define WM_DEF_INTERVAL     86400           // Default cycle interval (1 day)
 
 #define DAY_SEC    86400
 #define WEEK_SEC   604800
+
+#define EXECVE_ERROR 0x7F
 
 typedef void* (*wm_routine)(void*);     // Standard routine pointer
 
@@ -76,11 +83,15 @@ typedef enum crypto_type {
 #include "wm_command.h"
 #include "wm_ciscat.h"
 #include "wm_aws.h"
-#include "wm_vuln_detector.h"
+#include "vulnerability_detector/wm_vuln_detector.h"
 #include "wm_osquery_monitor.h"
 #include "wm_download.h"
 #include "wm_azure.h"
 #include "wm_docker.h"
+#include "wm_keyrequest.h"
+#include "wm_sca.h"
+#include "wm_fluent.h"
+#include "wm_control.h"
 
 extern wmodule *wmodules;       // Loaded modules.
 extern int wm_task_nice;        // Nice value for tasks.
@@ -130,18 +141,14 @@ void wm_append_sid(pid_t sid);
 void wm_remove_sid(pid_t sid);
 #endif
 
+// Initialize children pool
+void wm_children_pool_init();
+
 // Terminate every child process group
 void wm_kill_children();
 
 // Reads an HTTP header and extracts the size of the response
 long int wm_read_http_size(char *header);
-
-/* Concatenate strings with optional separator
- *
- * str1 must be a valid pointer to NULL or a string at heap
- * Returns 0 if success, or -1 if fail.
- */
-int wm_strcat(char **str1, const char *str2, char sep);
 
 // Tokenize string separated by spaces, respecting double-quotes
 char** wm_strtok(char *string);
@@ -192,5 +199,9 @@ size_t wmcom_getconfig(const char * section, char ** output);
 
 // Sleep function for Windows and Unix (milliseconds)
 void wm_delay(unsigned int ms);
+
+#ifdef __MACH__
+void freegate(gateway *gate);
+#endif
 
 #endif // W_MODULES

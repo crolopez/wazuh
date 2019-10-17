@@ -1,14 +1,15 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
  */
 
-#ifndef _EVTINFO__H
-#define _EVTINFO__H
+#ifndef EVTINFO_H
+#define EVTINFO_H
 
 #include "rules.h"
 #include "decoders/decoder.h"
@@ -51,6 +52,7 @@ typedef struct _Eventinfo {
     char *command;
     char *url;
     char *data;
+    char *extra_data;
     char *systemname;
     DynamicField *fields;
     int nfields;
@@ -85,8 +87,11 @@ typedef struct _Eventinfo {
     syscheck_event_t event_type;
     char *filename;
     char *sk_tag;
+    char *sym_path;
     int perm_before;
     int perm_after;
+    char *win_perm_before;
+    char *win_perm_after;
     char *md5_before;
     char *md5_after;
     char *sha1_before;
@@ -110,6 +115,8 @@ typedef struct _Eventinfo {
     char *diff;
     char *previous;
     wlabel_t *labels;
+    unsigned int attrs_before;
+    unsigned int attrs_after;
     // Whodata fields
     char *user_id;
     char *user_name;
@@ -126,6 +133,7 @@ typedef struct _Eventinfo {
     int rootcheck_fts;
     int is_a_copy;
     char **last_events;
+    int r_firedtimes;
     int queue_added;
     // Node reference
     EventNode *node;
@@ -137,7 +145,7 @@ typedef struct _Eventinfo {
 struct _EventNode {
     Eventinfo *event;
     pthread_mutex_t mutex;
-    int count;
+    volatile int count;
     EventNode *next;
     EventNode *prev;
 };
@@ -223,6 +231,7 @@ void *Action_FP(Eventinfo *lf, char *field, const char *order);
 void *ID_FP(Eventinfo *lf, char *field, const char *order);
 void *Url_FP(Eventinfo *lf, char *field, const char *order);
 void *Data_FP(Eventinfo *lf, char *field, const char *order);
+void *Extra_Data_FP(Eventinfo *lf, char *field, const char *order);
 void *Status_FP(Eventinfo *lf, char *field, const char *order);
 void *SystemName_FP(Eventinfo *lf, char *field, const char *order);
 void *DynamicField_FP(Eventinfo *lf, char *field, const char *order);
@@ -235,4 +244,4 @@ void w_copy_event_for_log(Eventinfo *lf,Eventinfo *lf_cpy);
 #define add_lastevt(x, y, z) os_realloc(x, sizeof(char *) * (y + 2), x); \
                              os_strdup(z, x[y]); \
                              x[y + 1] = NULL;
-#endif /* _EVTINFO__H */
+#endif /* EVTINFO_H */

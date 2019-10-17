@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
 # Database support for Wazuh HIDS.
-# Copyright 2018 Wazuh, Inc. <info@wazuh.com>
+# Copyright (C) 2015-2019, Wazuh Inc. <info@wazuh.com>
 # September 28, 2018.
 # This program is a free software, you can redistribute it
 # and/or modify it under the terms of GPLv2.
+# Revision 11/13/2018
 
 import sys
 from getopt import getopt, GetoptError
@@ -68,19 +69,24 @@ def _fim_decode(fline):
     fim = None
     timestamp = None
     path = None
-    readed = fline
-    fline = fline[3:-1].split(b'!')
+    read = fline
+    fline = fline[3:-1].split(b' !')
     if len(fline) == 2:
-        fim = fline[0][:-1]
+        fim = fline[0]
+        # Delete invalid content "!:::::::"
+        fim = fim.split(b'!')[0]
         parsed = fline[1].split(b' ', 1)
         if len(parsed) == 2:
             timestamp = parsed[0]
             path = parsed[1]
         else:
-            logging.debug("Error parsing line: {0}".format(readed))
             logging.error("Couldn't decode line at syscheck database.")
+            logging.debug("Error parsing line: {0}".format(read))
+            return None
     else:
         logging.error("Couldn't decode line at syscheck database.")
+        logging.debug("Error parsing line: {0}".format(read))
+        return None
 
     return fim, timestamp, path
 
@@ -231,6 +237,8 @@ if __name__ == '__main__':
             for line in syscheck:
                 if not line[0] == b'#':
                     decoded = _fim_decode(line)
+                    if not decoded:
+                        continue
                     if not _force:
                         if not check_file_entry(0, decoded[2], s):
                             res = insert_fim(0, decoded, 'file', s)
@@ -283,6 +291,8 @@ if __name__ == '__main__':
                 for line in syscheck:
                     if not line[0] == b'#':
                         decoded = _fim_decode(line)
+                        if not decoded:
+                            continue
                         if not _force:
                             if not check_file_entry(agt[0], decoded[2], s):
                                 res = insert_fim(agt[0], decoded, 'file', s)
@@ -316,6 +326,8 @@ if __name__ == '__main__':
                 for line in syscheck:
                     if not line[0] == b'#':
                         decoded = _fim_decode(line)
+                        if not decoded:
+                            continue
                         if not _force:
                             if not check_file_entry(agt[0], decoded[2], s):
                                 res = insert_fim(agt[0], decoded, 'registry', s)

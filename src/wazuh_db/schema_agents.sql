@@ -1,11 +1,11 @@
 /*
  * SQL Schema for global database
- * Copyright 2016 Wazuh, Inc. <info@wazuh.com>
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * June 30, 2016.
  * This program is a free software, you can redistribute it
  * and/or modify it under the terms of GPLv2.
  */
- 
+
 CREATE TABLE IF NOT EXISTS fim_entry (
     file TEXT PRIMARY KEY,
     type TEXT NOT NULL CHECK (type IN ('file', 'registry')),
@@ -21,13 +21,15 @@ CREATE TABLE IF NOT EXISTS fim_entry (
     gname TEXT,
     mtime INTEGER,
     inode INTEGER,
-    sha256 TEXT
+    sha256 TEXT,
+    attributes INTEGER DEFAULT 0,
+    symbolic_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pm_event (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date_first TEXT,
-    date_last TEXT,
+    date_first INTEGER,
+    date_last INTEGER,
     log TEXT,
     pci_dss TEXT,
     cis TEXT
@@ -35,8 +37,6 @@ CREATE TABLE IF NOT EXISTS pm_event (
 
 CREATE INDEX IF NOT EXISTS pm_event_log ON pm_event (log);
 CREATE INDEX IF NOT EXISTS pm_event_date ON pm_event (date_last);
-
-PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS sys_netiface (
     scan_id INTEGER,
@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS sys_netproto (
     type TEXT,
     gateway TEXT,
     dhcp TEXT NOT NULL CHECK (dhcp IN ('enabled', 'disabled', 'unknown', 'BOOTP')) DEFAULT 'unknown',
+    metric INTEGER,
     PRIMARY KEY (scan_id, iface, type)
 );
 
@@ -73,11 +74,12 @@ CREATE INDEX IF NOT EXISTS netproto_id ON sys_netproto (scan_id);
 
 CREATE TABLE IF NOT EXISTS sys_netaddr (
     scan_id INTEGER REFERENCES sys_netproto (scan_id),
+    iface TEXT REFERENCES sys_netproto (iface),
     proto TEXT REFERENCES sys_netproto (type),
     address TEXT,
     netmask TEXT,
     broadcast TEXT,
-    PRIMARY KEY (scan_id, proto, address)
+    PRIMARY KEY (scan_id, iface, proto, address)
 );
 
 CREATE INDEX IF NOT EXISTS netaddr_id ON sys_netaddr (scan_id);
@@ -97,6 +99,7 @@ CREATE TABLE IF NOT EXISTS sys_osinfo (
     sysname TEXT,
     release TEXT,
     version TEXT,
+    os_release TEXT,
     PRIMARY KEY (scan_id, os_name)
 );
 
@@ -148,10 +151,21 @@ CREATE TABLE IF NOT EXISTS sys_programs (
     description TEXT,
     location TEXT,
     triaged INTEGER(1),
+    cpe TEXT,
+    msu_name TEXT,
     PRIMARY KEY (scan_id, name, version, architecture)
 );
 
 CREATE INDEX IF NOT EXISTS programs_id ON sys_programs (scan_id);
+
+CREATE TABLE IF NOT EXISTS sys_hotfixes (
+    scan_id INTEGER,
+    scan_time TEXT,
+    hotfix TEXT,
+    PRIMARY KEY (scan_id, scan_time, hotfix)
+);
+
+CREATE INDEX IF NOT EXISTS hotfix_id ON sys_hotfixes (scan_id);
 
 CREATE TABLE IF NOT EXISTS sys_processes (
     scan_id INTEGER,
@@ -220,3 +234,76 @@ CREATE TABLE IF NOT EXISTS scan_info (
     fim_second_check INTEGER,
     fim_third_check INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS sca_policy (
+   name TEXT,
+   file TEXT,
+   id TEXT,
+   description TEXT,
+   `references` TEXT,
+   hash_file TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sca_scan_info (
+   id INTEGER PRIMARY KEY,
+   start_scan INTEGER,
+   end_scan INTEGER,
+   policy_id TEXT REFERENCES sca_policy (id),
+   pass INTEGER,
+   fail INTEGER,
+   invalid INTEGER,
+   total_checks INTEGER,
+   score INTEGER,
+   hash TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sca_check (
+   scan_id INTEGER REFERENCES sca_scan_info (id),
+   id INTEGER PRIMARY KEY,
+   policy_id TEXT REFERENCES sca_policy (id),
+   title TEXT,
+   description TEXT,
+   rationale TEXT,
+   remediation TEXT,
+   file TEXT,
+   process TEXT,
+   directory TEXT,
+   registry TEXT,
+   command TEXT,
+   `references` TEXT,
+   result TEXT,
+   `status` TEXT,
+   reason TEXT,
+   condition TEXT
+);
+
+CREATE INDEX IF NOT EXISTS policy_id_index ON sca_check (policy_id);
+
+CREATE TABLE IF NOT EXISTS sca_check_rules (
+  id_check INTEGER REFERENCES sca_check (id),
+  `type` TEXT,
+  rule TEXT,
+  PRIMARY KEY (id_check, `type`, rule)
+);
+
+CREATE INDEX IF NOT EXISTS rules_id_check_index ON sca_check_rules (id_check);
+
+CREATE TABLE IF NOT EXISTS sca_check_compliance (
+   id_check INTEGER REFERENCES sca_check (id),
+  `key` TEXT,
+  `value` TEXT,
+   PRIMARY KEY (id_check, `key`, `value`)
+);
+
+CREATE INDEX IF NOT EXISTS comp_id_check_index ON sca_check_compliance (id_check);
+
+CREATE TABLE IF NOT EXISTS vuln_metadata (
+    LAST_SCAN INTEGER,
+    WAZUH_VERSION TEXT
+);
+INSERT INTO vuln_metadata (LAST_SCAN, WAZUH_VERSION)
+    SELECT '0', '0' WHERE NOT EXISTS (
+        SELECT * FROM vuln_metadata
+    );
+
+PRAGMA journal_mode=WAL;

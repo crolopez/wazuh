@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -122,11 +123,11 @@ int main(int argc, char **argv)
         int i = 0;
         while (i <= 6) {
             const char *daily_dir = STATWQUEUE;
-            char dir_path[OS_MAXSTR + 1];
+            char dir_path[PATH_MAX + 1];
             DIR *daily;
             struct dirent *entry;
 
-            snprintf(dir_path, OS_MAXSTR, "%s/%d", daily_dir, i);
+            snprintf(dir_path, PATH_MAX, "%s/%d", daily_dir, i);
             daily = opendir(dir_path);
             if (!daily) {
                 merror_exit("Unable to open: '%s' (no stats)", dir_path);

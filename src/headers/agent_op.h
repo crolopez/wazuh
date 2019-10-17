@@ -1,14 +1,15 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
  */
 
-#ifndef __AGENT_OP_H
-#define __AGENT_OP_H
+#ifndef AGENT_OP_H
+#define AGENT_OP_H
 
 /* Check if syscheck is to be executed/restarted
  * Returns 1 on success or 0 on failure (shouldn't be executed now)
@@ -62,9 +63,30 @@ int create_multigroup_dir(const char * multigroup);
 
 char* hostname_parse(const char *path);
 
-/* Validates the group name 
- * Returns 0 on success or  -1 on failure 
+/* Validates the group name
+ * Returns 0 on success or  -1 on failure
  */
 int w_validate_group_name(const char *group);
 
-#endif /* __AGENT_OP_H */
+int set_agent_multigroup(char * group);
+
+void w_remove_multigroup(const char *group);
+
+// Connect to Agentd. Returns socket or -1 on error.
+int auth_connect();
+
+// Close socket if valid.
+int auth_close(int sock);
+
+// Add agent. Returns 0 on success or -1 on error.
+int auth_add_agent(int sock, char *id, const char *name, const char *ip, const char *key, int force, int json_format,const char *agent_id,int exit_on_error);
+
+// Get the agent id
+char * get_agent_id_from_name(const char *agent_name);
+
+/* Check control module availability */
+#if defined (__linux__) || defined (__MACH__)
+int control_check_connection();
+#endif
+
+#endif /* AGENT_OP_H */

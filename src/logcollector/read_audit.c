@@ -1,7 +1,7 @@
-/* Copyright (C) 2016 Wazuh Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -48,32 +48,53 @@ void *read_audit(logreader *lf, int *rc, int drop_it) {
     char *id;
     char *p;
     size_t z;
-    long offset = ftell(lf->fp);
-    int lines = 0;
+    int64_t offset = 0;
+    int64_t rbytes = 0;
 
-    if (offset < 0) {
-        merror(FTELL_ERROR, lf->file, errno, strerror(errno));
-        return NULL;
-    }
+    int lines = 0;
 
     *rc = 0;
 
-    while (fgets(buffer, OS_MAXSTR, lf->fp) && (!maximum_lines || lines < maximum_lines)) {
+    for (offset = w_ftell(lf->fp); fgets(buffer, OS_MAXSTR, lf->fp) && (!maximum_lines || lines < maximum_lines) && offset >= 0; offset += rbytes) {
+        rbytes = w_ftell(lf->fp) - offset;
+
+        /* Flow control */
+        if (rbytes <= 0) {
+            break;
+        }
 
         lines++;
-        if ((p = strchr(buffer, '\n')))
-            *p = '\0';
-        else {
-            if (strlen(buffer) == OS_MAXSTR - 1) {
+
+        if (buffer[rbytes - 1] == '\n') {
+            buffer[rbytes - 1] = '\0';
+
+            if ((int64_t)strlen(buffer) != rbytes - 1)
+            {
+                mdebug2("Line in '%s' contains some zero-bytes (valid=" FTELL_TT " / total=" FTELL_TT "). Dropping line.", lf->file, FTELL_INT64 strlen(buffer), FTELL_INT64 rbytes - 1);
+                continue;
+            }
+        } else {
+            if (rbytes == OS_MAXSTR - 1) {
                 // Message too large, discard line
-                while (fgets(buffer, OS_MAXSTR, lf->fp) && !strchr(buffer, '\n'));
-            } else {
-                mdebug1("Message not complete. Trying again: '%s'", buffer);
+                for (offset += rbytes; fgets(buffer, OS_MAXSTR, lf->fp); offset += rbytes) {
+                    rbytes = w_ftell(lf->fp) - offset;
+
+                    /* Flow control */
+                    if (rbytes <= 0) {
+                        break;
+                    }
+
+                    if (buffer[rbytes - 1] == '\n') {
+                        break;
+                    }
+                }
+            } else if (feof(lf->fp)) {
+                mdebug2("Message not complete. Trying again: '%s'", buffer);
 
                 if (fseek(lf->fp, offset, SEEK_SET) < 0) {
-                    merror(FSEEK_ERROR, lf->file, errno, strerror(errno));
-                    break;
-                }
+                   merror(FSEEK_ERROR, lf->file, errno, strerror(errno));
+                   break;
+               }
             }
 
             break;

@@ -1,14 +1,15 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
  */
 
-#ifndef __CRAGENT_H
-#define __CRAGENT_H
+#ifndef CRAGENT_H
+#define CRAGENT_H
 
 #include <external/cJSON/cJSON.h>
 
@@ -54,7 +55,7 @@ int delete_agentinfo(const char *id, const char *name) __attribute__((nonnull));
 void delete_sqlite(const char *id, const char *name);
 
 /* Get all available agents */
-char **get_agents(int flag);
+char **get_agents(int flag, int mon_time);
 
 /* Free the agent list */
 void free_agents(char **agent_list);
@@ -66,7 +67,7 @@ const char *print_agent_status(agent_status_t status);
 agent_status_t get_agent_status(const char *agent_name, const char *agent_ip);
 
 /* Get information from an agent */
-agent_info *get_agent_info(const char *agent_name, const char *agent_ip) __attribute__((nonnull(2)));
+agent_info *get_agent_info(const char *agent_name, const char *agent_ip, const char *agent_id) __attribute__((nonnull(2)));
 
 /* Connect to remoted to be able to send messages to the agents
  * Returns the socket on success or -1 on failure
@@ -77,7 +78,7 @@ int connect_to_remoted(void);
 /* Return the unix permission string
  * Returns a pointer to a local static array
  */
-const char *agent_file_perm(mode_t mode);
+char *agent_file_perm(mode_t mode);
 #endif
 
 /* Sends a message to an agent
@@ -85,9 +86,23 @@ const char *agent_file_perm(mode_t mode);
  */
 int send_msg_to_agent(int msocket, const char *msg, const char *agt_id, const char *exec) __attribute__((nonnull(2)));
 
+/*
+ * Send query to Wazuh-db
+ * Returns -1 on error
+ */
+int query_wazuhdb(const char *wazuhdb_query, const char *source, char **output);
+
+/*
+ * Gets FIM scan-time
+ * Returns -1 on error
+ */
+time_t scantime_fim (const char *agent_id, const char *scan);
+
+
+
 #define GA_NOTACTIVE        2
 #define GA_ACTIVE           3
 #define GA_ALL              5
 #define GA_ALL_WSTATUS      7
 
-#endif
+#endif /* CRAGENT_H */

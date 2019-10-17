@@ -1,4 +1,6 @@
 #!/bin/sh
+
+# Copyright (C) 2015-2019, Wazuh Inc.
 # ossec-control        This shell script takes care of starting
 #                      or stopping ossec-hids
 # Author: Daniel B. Cid <daniel.cid@gmail.com>
@@ -27,6 +29,8 @@ LOCK_PID="${LOCK}/pid"
 # started multiple times together). It will try for up
 # to 10 attempts (or 10 seconds) to execute.
 MAX_ITERATION="10"
+
+MAX_KILL_TRIES=600
 
 checkpid()
 {
@@ -124,7 +128,7 @@ testconfig()
 # Start function
 start()
 {
-    echo "Starting $NAME $VERSION (maintained by $AUTHOR)..."
+    echo "Starting $NAME $VERSION..."
     checkpid;
 
     # Delete all files in temporary folder
@@ -168,7 +172,7 @@ pstatus()
         for j in `cat ${DIR}/var/run/${pfile}*.pid 2>/dev/null`; do
             ps -p $j > /dev/null 2>&1
             if [ ! $? = 0 ]; then
-                echo "${pfile}: Process $j not used by ossec, removing .."
+                echo "${pfile}: Process $j not used by Wazuh, removing .."
                 rm -f ${DIR}/var/run/${pfile}-$j.pid
                 continue;
             fi
@@ -183,17 +187,42 @@ pstatus()
     return 0;
 }
 
+wait_pid() {
+    wp_counter=1
+
+    while kill -0 $1 2> /dev/null
+    do
+        if [ "$wp_counter" = "$MAX_KILL_TRIES" ]
+        then
+            return 1
+        else
+            # sleep doesn't work in AIX
+            # read doesn't work in FreeBSD
+            sleep 0.1 > /dev/null 2>&1 || read -t 0.1 > /dev/null 2>&1
+            wp_counter=`expr $wp_counter + 1`
+        fi
+    done
+
+    return 0
+}
+
 stopa()
 {
     checkpid;
     for i in ${DAEMONS}; do
         pstatus ${i};
         if [ $? = 1 ]; then
-            echo "Killing ${i} .. ";
+            echo "Killing ${i}... ";
 
-            kill `cat ${DIR}/var/run/${i}*.pid`;
+            pid=`cat ${DIR}/var/run/${i}*.pid`
+            kill $pid
+
+            if ! wait_pid $pid
+            then
+                echo "Process ${i} couldn't be killed.";
+            fi
         else
-            echo "${i} not running ..";
+            echo "${i} not running...";
         fi
 
         rm -f ${DIR}/var/run/${i}*.pid

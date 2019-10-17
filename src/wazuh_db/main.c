@@ -1,9 +1,9 @@
 /*
  * Wazuh Database Daemon
- * Copyright (C) 2018 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * January 03, 2018.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -18,6 +18,7 @@ static void cleanup();
 static void * run_dealer(void * args);
 static void * run_worker(void * args);
 static void * run_gc(void * args);
+static void * run_up(void * args);
 
 //int wazuhdb_fdsock;
 wnotify_t * notify_queue;
@@ -34,8 +35,9 @@ int main(int argc, char ** argv) {
     int status;
 
     pthread_t thread_dealer;
-    pthread_t * worker_pool;
+    pthread_t * worker_pool = NULL;
     pthread_t thread_gc;
+    pthread_t thread_up;
 
     OS_SetName(ARGV0);
 
@@ -76,7 +78,7 @@ int main(int argc, char ** argv) {
 
     config.sock_queue_size = getDefine_Int("wazuh_db", "sock_queue_size", 1, 1024);
     config.worker_pool_size = getDefine_Int("wazuh_db", "worker_pool_size", 1, 32);
-    config.commit_time = getDefine_Int("wazuh_db", "commit_time", 1, 3600);
+    config.commit_time = getDefine_Int("wazuh_db", "commit_time", 10, 3600);
     config.open_db_limit = getDefine_Int("wazuh_db", "open_db_limit", 1, 4096);
     nofile = getDefine_Int("wazuh_db", "rlimit_nofile", 1024, 1048576);
 
@@ -96,6 +98,7 @@ int main(int argc, char ** argv) {
 
     //sock_queue = queue_init(config.sock_queue_size);
     open_dbs = OSHash_Create();
+    if (!open_dbs) merror_exit("wazuh_db: OSHash_Create() failed");
 
     mdebug1(STARTED_MSG);
 
@@ -103,6 +106,13 @@ int main(int argc, char ** argv) {
         goDaemon();
         nowDaemon();
     }
+
+    // Reset template. Basically, remove queue/db/.template.db
+    // The prefix is needed here, because we are not yet chrooted
+    char path_template[OS_FLSIZE + 1];
+    snprintf(path_template, sizeof(path_template), "%s/%s/%s", DEFAULTDIR, WDB2_DIR, WDB_PROF_NAME);
+    unlink(path_template);
+    mdebug1("Template file removed: %s", path_template);
 
     // Set max open files limit
     struct rlimit rlimit = { nofile, nofile };
@@ -167,7 +177,7 @@ int main(int argc, char ** argv) {
 
     if (status = pthread_create(&thread_dealer, NULL, run_dealer, NULL), status != 0) {
         merror("Couldn't create thread: %s", strerror(status));
-        return EXIT_FAILURE;
+        goto failure;
     }
 
     os_malloc(sizeof(pthread_t) * config.worker_pool_size, worker_pool);
@@ -175,13 +185,18 @@ int main(int argc, char ** argv) {
     for (i = 0; i < config.worker_pool_size; i++) {
         if (status = pthread_create(worker_pool + i, NULL, run_worker, NULL), status != 0) {
             merror("Couldn't create thread: %s", strerror(status));
-            return EXIT_FAILURE;
+            goto failure;
         }
     }
 
     if (status = pthread_create(&thread_gc, NULL, run_gc, NULL), status != 0) {
         merror("Couldn't create thread: %s", strerror(status));
-        return EXIT_FAILURE;
+        goto failure;
+    }
+
+    if (status = pthread_create(&thread_up, NULL, run_up, NULL), status != 0) {
+        merror("Couldn't create thread: %s", strerror(status));
+        goto failure;
     }
 
     // Join threads
@@ -197,7 +212,17 @@ int main(int argc, char ** argv) {
     pthread_join(thread_gc, NULL);
     wdb_close_all();
 
+    // Reset template here too, remove queue/db/.template.db again
+    // Without the prefix, because chrooted at that point
+    snprintf(path_template, sizeof(path_template), "%s/%s", WDB2_DIR, WDB_PROF_NAME);
+    unlink(path_template);
+    mdebug1("Template file removed again: %s", path_template);
+
     return EXIT_SUCCESS;
+
+failure:
+    free(worker_pool);
+    return EXIT_FAILURE;
 }
 
 void * run_dealer(__attribute__((unused)) void * args) {
@@ -355,6 +380,57 @@ void * run_gc(__attribute__((unused)) void * args) {
         sleep(1);
     }
 
+    return NULL;
+}
+
+void * run_up(__attribute__((unused)) void * args) {
+    DIR *fd;
+    struct dirent *db;
+    wdb_t * wdb;
+    char * db_folder;
+    char * name;
+    char * entry;
+
+    os_calloc(PATH_MAX + 1, sizeof(char), db_folder);
+    snprintf(db_folder, PATH_MAX, "%s", WDB2_DIR);
+
+    fd = opendir(db_folder);
+
+    if (!fd) {
+        mdebug1("Opening directory: '%s': %s", db_folder, strerror(errno));
+        os_free(db_folder);
+        return NULL;
+    }
+
+    while ((db = readdir(fd)) != NULL) {
+        if ((strcmp(db->d_name, ".") == 0) ||
+            (strcmp(db->d_name, "..") == 0) ||
+            (strcmp(db->d_name, ".template.db") == 0) ||
+            (strcmp(db->d_name, "000.db") == 0)) {
+            continue;
+        }
+
+        os_strdup(db->d_name, entry);
+
+        if (name = strchr(entry, '-'), name) {
+            free(entry);
+            continue;
+        }
+
+        if (name = strchr(entry, '.'), !name) {
+            free(entry);
+            continue;
+        }
+
+        *(name++) = '\0';
+        wdb = wdb_open_agent2(atoi(entry));
+        mdebug2("Upgraded DB for agent '%s' in run_up", wdb->agent_id);
+        wdb_leave(wdb);
+        free(entry);
+    }
+
+    os_free(db_folder);
+    closedir(fd);
     return NULL;
 }
 

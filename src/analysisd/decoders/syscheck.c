@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -46,9 +47,21 @@ static pthread_mutex_t control_msg_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 // Initialize the necessary information to process the syscheck information
-void fim_init(void) {
+int fim_init(void) {
+    //Create hash table for agent information
+    fim_agentinfo = OSHash_Create();
+    if (fim_agentinfo == NULL) return 0;
+    return 1;
+}
+
+// Initialize the necessary information to process the syscheck information
+void sdb_init(_sdb *localsdb, OSDecoderInfo *fim_decoder) {
+    localsdb->db_err = 0;
+    localsdb->socket = -1;
+
+    sdb_clean(localsdb);
+
     // Create decoder
-    os_calloc(1, sizeof(OSDecoderInfo), fim_decoder);
     fim_decoder->id = getDecoderfromlist(SYSCHECK_MOD);
     fim_decoder->name = SYSCHECK_MOD;
     fim_decoder->type = OSSEC_RL;
@@ -63,6 +76,7 @@ void fim_init(void) {
     fim_decoder->fields[SK_MD5] = "md5";
     fim_decoder->fields[SK_SHA1] = "sha1";
     fim_decoder->fields[SK_SHA256] = "sha256";
+    fim_decoder->fields[SK_ATTRS] = "attributes";
     fim_decoder->fields[SK_UNAME] = "uname";
     fim_decoder->fields[SK_GNAME] = "gname";
     fim_decoder->fields[SK_INODE] = "inode";
@@ -81,44 +95,36 @@ void fim_init(void) {
     fim_decoder->fields[SK_PPID] = "ppid";
     fim_decoder->fields[SK_PROC_ID] = "process_id";
     fim_decoder->fields[SK_TAG] = "tag";
-
-    //Create hash table for agent information
-    fim_agentinfo = OSHash_Create();
-}
-
-// Initialize the necessary information to process the syscheck information
-void sdb_init(_sdb *localsdb) {
-    localsdb->db_err = 0;
-    localsdb->socket = -1;
-
-    sdb_clean(localsdb);
+    fim_decoder->fields[SK_SYM_PATH] = "symbolic_path";
 }
 
 // Initialize the necessary information to process the syscheck information
 void sdb_clean(_sdb *localsdb) {
-    memset(localsdb->comment, '\0', OS_MAXSTR + 1);
-    memset(localsdb->size, '\0', OS_FLSIZE + 1);
-    memset(localsdb->perm, '\0', OS_FLSIZE + 1);
-    memset(localsdb->owner, '\0', OS_FLSIZE + 1);
-    memset(localsdb->gowner, '\0', OS_FLSIZE + 1);
-    memset(localsdb->md5, '\0', OS_FLSIZE + 1);
-    memset(localsdb->sha1, '\0', OS_FLSIZE + 1);
-    memset(localsdb->sha256, '\0', OS_FLSIZE + 1);
-    memset(localsdb->mtime, '\0', OS_FLSIZE + 1);
-    memset(localsdb->inode, '\0', OS_FLSIZE + 1);
+    *localsdb->comment = '\0';
+    *localsdb->size = '\0';
+    *localsdb->perm = '\0';
+    *localsdb->attrs = '\0';
+    *localsdb->sym_path = '\0';
+    *localsdb->owner = '\0';
+    *localsdb->gowner = '\0';
+    *localsdb->md5 = '\0';
+    *localsdb->sha1 = '\0';
+    *localsdb->sha256 = '\0';
+    *localsdb->mtime = '\0';
+    *localsdb->inode = '\0';
 
     // Whodata fields
-    memset(localsdb->user_id, '\0', OS_FLSIZE + 1);
-    memset(localsdb->user_name, '\0', OS_FLSIZE + 1);
-    memset(localsdb->group_id, '\0', OS_FLSIZE + 1);
-    memset(localsdb->group_name, '\0', OS_FLSIZE + 1);
-    memset(localsdb->process_name, '\0', OS_FLSIZE + 1);
-    memset(localsdb->audit_uid, '\0', OS_FLSIZE + 1);
-    memset(localsdb->audit_name, '\0', OS_FLSIZE + 1);
-    memset(localsdb->effective_uid, '\0', OS_FLSIZE + 1);
-    memset(localsdb->effective_name, '\0', OS_FLSIZE + 1);
-    memset(localsdb->ppid, '\0', OS_FLSIZE + 1);
-    memset(localsdb->process_id, '\0', OS_FLSIZE + 1);
+    *localsdb->user_id = '\0';
+    *localsdb->user_name = '\0';
+    *localsdb->group_id = '\0';
+    *localsdb->group_name = '\0';
+    *localsdb->process_name = '\0';
+    *localsdb->audit_uid = '\0';
+    *localsdb->audit_name = '\0';
+    *localsdb->effective_uid = '\0';
+    *localsdb->effective_name = '\0';
+    *localsdb->ppid = '\0';
+    *localsdb->process_id = '\0';
 }
 
 /* Special decoder for syscheck
@@ -136,8 +142,10 @@ int DecodeSyscheck(Eventinfo *lf, _sdb *sdb)
      * or
      * 'checksum'!'extradata' 'filename'
      * or
-     * "size:permision:uid:gid:md5:sha1:uname:gname:mtime:inode:sha256!w:h:o:d:a:t:a:tag filename\nreportdiff"
-     *  ^^^^^^^^^^^^^^^^^^^^^^^^^^^checksum^^^^^^^^^^^^^^^^^^^^^^^^^^^!^^^^extradata^^^^ filename\n^^^diff^^^'
+     *                                             |v2.1       v3.4   |v3.4         |v3.6 |v3.9
+     *                                             |->         |->    |->           |->   |->
+     * "size:permision:uid:gid:md5:sha1:uname:gname:mtime:inode:sha256!w:h:o:d:a:t:a:tags:symbolic_path:silent filename\nreportdiff"
+     *  ^^^^^^^^^^^^^^^^^^^^^^^^^^^checksum^^^^^^^^^^^^^^^^^^^^^^^^^^^!^^^^extradata^^^^^ filename\n^^^diff^^^'
      */
     sdb_clean(sdb);
     f_name = wstr_chr(lf->log, ' ');
@@ -148,7 +156,7 @@ int DecodeSyscheck(Eventinfo *lf, _sdb *sdb)
         case -1:
             return (-1);
         case 0:
-            merror(SK_INV_MSG);
+            merror(FIM_INVALID_MESSAGE);
             return (-1);
         default:
             return(0);
@@ -188,7 +196,7 @@ int DecodeSyscheck(Eventinfo *lf, _sdb *sdb)
     c_sum = lf->log;
 
     // Get w_sum
-    if (w_sum = strchr(c_sum, '!'), w_sum) {
+    if (w_sum = wstr_chr(c_sum, '!'), w_sum) {
         *(w_sum++) = '\0';
     }
 
@@ -208,6 +216,7 @@ int fim_db_search(char *f_name, char *c_sum, char *w_sum, Eventinfo *lf, _sdb *s
     char *old_check_sum = NULL;
     char *response = NULL;
     char *check_sum = NULL;
+    char *sym_path = NULL;
     sk_sum_t oldsum = { .size = NULL };
     sk_sum_t newsum = { .size = NULL };
     time_t *end_first_scan = NULL;
@@ -233,7 +242,11 @@ int fim_db_search(char *f_name, char *c_sum, char *w_sum, Eventinfo *lf, _sdb *s
         os_free(lf->data);
         goto exit_fail;
     }
-    check_sum = strchr(response, ' ');
+
+    if(check_sum = wstr_chr(response, ' '), !check_sum) {
+        merror("FIM decoder: Bad response: '%s' '%s'.", wazuhdb_query, response);
+        goto exit_fail;
+    }
     *(check_sum++) = '\0';
 
     //extract changes and date_alert fields only available from wazuh_db
@@ -309,14 +322,20 @@ int fim_db_search(char *f_name, char *c_sum, char *w_sum, Eventinfo *lf, _sdb *s
                 *ttype = "file";
             }
 
-            snprintf(wazuhdb_query, OS_SIZE_6144, "agent %s syscheck save %s %s!%d:%ld %s",
+            if (newsum.symbolic_path) {
+                sym_path = escape_syscheck_field(newsum.symbolic_path);
+            }
+
+            snprintf(wazuhdb_query, OS_SIZE_6144, "agent %s syscheck save %s %s!%d:%ld:%s %s",
                     lf->agent_id,
                     *ttype,
                     new_check_sum,
                     changes,
                     lf->time.tv_sec,
+                    sym_path ? sym_path : "",
                     f_name
             );
+            os_free(sym_path);
             os_free(response);
             response = NULL;
             db_result = send_query_wazuhdb(wazuhdb_query, &response, sdb);
@@ -363,32 +382,39 @@ int fim_db_search(char *f_name, char *c_sum, char *w_sum, Eventinfo *lf, _sdb *s
             break;
 
         default: // Error in fim check sum
-            merror("at fim_db_search: Agent '%s' Couldn't decode fim sum '%s' from file '%s'.",
+            mwarn("at fim_db_search: Agent '%s' Couldn't decode fim sum '%s' from file '%s'.",
                     lf->agent_id, new_check_sum, f_name);
             goto exit_fail;
     }
 
-    sk_fill_event(lf, f_name, &newsum);
+    if (!newsum.silent) {
+        sk_fill_event(lf, f_name, &newsum);
 
-    /* Dyanmic Fields */
-    lf->nfields = SK_NFIELDS;
-    for (i = 0; i < SK_NFIELDS; i++) {
-        os_strdup(fim_decoder->fields[i], lf->fields[i].key);
-    }
+        /* Dyanmic Fields */
+        lf->nfields = SK_NFIELDS;
+        for (i = 0; i < SK_NFIELDS; i++) {
+            os_strdup(lf->decoder_info->fields[i], lf->fields[i].key);
+        }
 
-    if(fim_alert(f_name, &oldsum, &newsum, lf, sdb) == -1) {
-        //No changes in checksum
-        goto exit_ok;
+        if(fim_alert(f_name, &oldsum, &newsum, lf, sdb) == -1) {
+            //No changes in checksum
+            goto exit_ok;
+        }
+        sk_sum_clean(&newsum);
+        sk_sum_clean(&oldsum);
+        os_free(response);
+        os_free(new_check_sum);
+        os_free(old_check_sum);
+        os_free(wazuhdb_query);
+
+        return (1);
+    } else {
+        mdebug2("Ignoring FIM event on '%s'.", f_name);
     }
-    sk_sum_clean(&newsum);
-    os_free(response);
-    os_free(new_check_sum);
-    os_free(old_check_sum);
-    os_free(wazuhdb_query);
-    return (1);
 
 exit_ok:
     sk_sum_clean(&newsum);
+    sk_sum_clean(&oldsum);
     os_free(response);
     os_free(new_check_sum);
     os_free(old_check_sum);
@@ -397,6 +423,7 @@ exit_ok:
 
 exit_fail:
     sk_sum_clean(&newsum);
+    sk_sum_clean(&oldsum);
     os_free(response);
     os_free(new_check_sum);
     os_free(old_check_sum);
@@ -406,19 +433,41 @@ exit_fail:
 
 
 int send_query_wazuhdb(char *wazuhdb_query, char **output, _sdb *sdb) {
-    char response[OS_SIZE_6144];
-    fd_set fdset;
-    struct timeval timeout = {0, 1000};
-    int size = strlen(wazuhdb_query);
+
     int retval = -2;
-    static time_t last_attempt = 0;
-    time_t mtime;
+    int attempts;
 
     // Connect to socket if disconnected
     if (sdb->socket < 0) {
-        if (mtime = time(NULL), mtime >= last_attempt + 10) {
+        for (attempts = 1; attempts <= FIM_MAX_WAZUH_DB_ATTEMPS && (sdb->socket = OS_ConnectUnixDomain(WDB_LOCAL_SOCK, SOCK_STREAM, OS_SIZE_6144)) < 0; attempts++) {
+            switch (errno) {
+            case ENOENT:
+                mtinfo(ARGV0, "FIM decoder: Cannot find '%s'. Waiting %d seconds to reconnect.", WDB_LOCAL_SOCK, attempts);
+                break;
+            default:
+                mtinfo(ARGV0, "FIM decoder: Cannot connect to '%s': %s (%d). Waiting %d seconds to reconnect.", WDB_LOCAL_SOCK, strerror(errno), errno, attempts);
+            }
+            sleep(attempts);
+        }
+
+        if (sdb->socket < 0) {
+            mterror(ARGV0, "FIM decoder: Unable to connect to socket '%s'.", WDB_LOCAL_SOCK);
+            return retval;
+        }
+    }
+
+    int size = strlen(wazuhdb_query);
+
+    // Send query to Wazuh DB
+    if (OS_SendSecureTCP(sdb->socket, size + 1, wazuhdb_query) != 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            mterror(ARGV0, "FIM decoder: database socket is full");
+        } else if (errno == EPIPE) {
+            // Retry to connect
+            mterror(ARGV0, "FIM decoder: Connection with wazuh-db lost. Reconnecting.");
+            close(sdb->socket);
+
             if (sdb->socket = OS_ConnectUnixDomain(WDB_LOCAL_SOCK, SOCK_STREAM, OS_SIZE_6144), sdb->socket < 0) {
-                last_attempt = mtime;
                 switch (errno) {
                 case ENOENT:
                     mterror(ARGV0, "FIM decoder: Cannot find '%s'. Please check that Wazuh DB is running.", WDB_LOCAL_SOCK);
@@ -426,59 +475,21 @@ int send_query_wazuhdb(char *wazuhdb_query, char **output, _sdb *sdb) {
                 default:
                     mterror(ARGV0, "FIM decoder: Cannot connect to '%s': %s (%d)", WDB_LOCAL_SOCK, strerror(errno), errno);
                 }
-                return (-2);
-            }
-        } else {
-            // Return silently
-            return (-1);
-        }
-    }
-
-    // Send query to Wazuh DB
-    if (OS_SendSecureTCP(sdb->socket, size + 1, wazuhdb_query) != 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            mterror(ARGV0, "FIM decoder: database socket is full");
-        } else if (errno == EPIPE) {
-            if (mtime = time(NULL), mtime >= last_attempt + 10) {
-                // Retry to connect
-                mterror(ARGV0, "FIM decoder: Connection with wazuh-db lost. Reconnecting.");
-                close(sdb->socket);
-
-                if (sdb->socket = OS_ConnectUnixDomain(WDB_LOCAL_SOCK, SOCK_STREAM, OS_SIZE_6144), sdb->socket < 0) {
-                    last_attempt = mtime;
-                    switch (errno) {
-                    case ENOENT:
-                        mterror(ARGV0, "FIM decoder: Cannot find '%s'. Please check that Wazuh DB is running.", WDB_LOCAL_SOCK);
-                        break;
-                    default:
-                        mterror(ARGV0, "FIM decoder: Cannot connect to '%s': %s (%d)", WDB_LOCAL_SOCK, strerror(errno), errno);
-                    }
-                    return (-2);
-                }
-
-                if (!OS_SendSecureTCP(sdb->socket, size + 1, wazuhdb_query)) {
-                    last_attempt = mtime;
-                    mterror(ARGV0, "FIM decoder: in send reattempt (%d) '%s'.", errno, strerror(errno));
-                    return (-2);
-                }
-            } else {
-                // Return silently
-                return (-1);
+                return retval;
             }
 
+            if (OS_SendSecureTCP(sdb->socket, size + 1, wazuhdb_query)) {
+                mterror(ARGV0, "FIM decoder: in send reattempt (%d) '%s'.", errno, strerror(errno));
+                return retval;
+            }
         } else {
             mterror(ARGV0, "FIM decoder: in send (%d) '%s'.", errno, strerror(errno));
         }
     }
 
-    // Wait for socket
-    FD_ZERO(&fdset);
-    FD_SET(sdb->socket, &fdset);
+    retval = -1;
 
-    if (select(sdb->socket + 1, &fdset, NULL, NULL, &timeout) < 0) {
-        mterror(ARGV0, "FIM decoder: in select (%d) '%s'.", errno, strerror(errno));
-        return (-2);
-    }
+    char response[OS_SIZE_6144];
 
     // Receive response from socket
     if (OS_RecvSecureTCP(sdb->socket, response, OS_SIZE_6144 - 1) > 0) {
@@ -488,11 +499,9 @@ int send_query_wazuhdb(char *wazuhdb_query, char **output, _sdb *sdb) {
             retval = 0;
         } else {
             mterror(ARGV0, "FIM decoder: Bad response '%s'.", response);
-            return retval;
         }
     } else {
         mterror(ARGV0, "FIM decoder: no response from wazuh-db.");
-        return retval;
     }
 
     return retval;
@@ -503,19 +512,26 @@ int fim_alert (char *f_name, sk_sum_t *oldsum, sk_sum_t *newsum, Eventinfo *lf, 
     int comment_buf = 0;
     char msg_type[OS_FLSIZE];
 
-    // Set decoder
-    lf->decoder_info = fim_decoder;
     switch (lf->event_type) {
         case FIM_DELETED:
             snprintf(msg_type, sizeof(msg_type), "was deleted.");
+            lf->decoder_info->id = getDecoderfromlist(SYSCHECK_DEL);
+            lf->decoder_syscheck_id = lf->decoder_info->id;
+            lf->decoder_info->name = SYSCHECK_MOD;
             changes=1;
             break;
         case FIM_ADDED:
             snprintf(msg_type, sizeof(msg_type), "was added.");
+            lf->decoder_info->id = getDecoderfromlist(SYSCHECK_NEW);
+            lf->decoder_syscheck_id = lf->decoder_info->id;
+            lf->decoder_info->name = SYSCHECK_NEW;
             changes=1;
             break;
         case FIM_MODIFIED:
             snprintf(msg_type, sizeof(msg_type), "checksum changed.");
+            lf->decoder_info->id = getDecoderfromlist(SYSCHECK_MOD);
+            lf->decoder_syscheck_id = lf->decoder_info->id;
+            lf->decoder_info->name = SYSCHECK_MOD;
             if (oldsum->size && newsum->size) {
                 if (strcmp(oldsum->size, newsum->size) == 0) {
                     localsdb->size[0] = '\0';
@@ -539,15 +555,31 @@ int fim_alert (char *f_name, sk_sum_t *oldsum, sk_sum_t *newsum, Eventinfo *lf, 
                     wm_strcat(&lf->fields[SK_CHFIELDS].value, "perm", ',');
                     char opstr[10];
                     char npstr[10];
+                    char *old_perm =  agent_file_perm(oldsum->perm);
+                    char *new_perm =  agent_file_perm(newsum->perm);
 
-                    strncpy(opstr, agent_file_perm(oldsum->perm), sizeof(opstr) - 1);
-                    strncpy(npstr, agent_file_perm(newsum->perm), sizeof(npstr) - 1);
+                    strncpy(opstr, old_perm, sizeof(opstr) - 1);
+                    strncpy(npstr, new_perm, sizeof(npstr) - 1);
+                    free(old_perm);
+                    free(new_perm);
+
                     opstr[9] = npstr[9] = '\0';
-
                     snprintf(localsdb->perm, OS_FLSIZE, "Permissions changed from "
                              "'%9.9s' to '%9.9s'\n", opstr, npstr);
 
                     lf->perm_before = oldsum->perm;
+                }
+            } else if (oldsum->win_perm && newsum->win_perm) { // Check for Windows permissions
+                if (!strcmp(oldsum->win_perm, newsum->win_perm)) {
+                    localsdb->perm[0] = '\0';
+                } else if (*oldsum->win_perm != '\0' && *newsum->win_perm != '\0') {
+                    changes = 1;
+                    wm_strcat(&lf->fields[SK_CHFIELDS].value, "perm", ',');
+                    if (!decode_win_permissions(localsdb->perm, OS_FLSIZE, newsum->win_perm, 1, NULL)) {
+                        localsdb->perm[0] = '\0';
+                    }
+
+                    os_strdup(oldsum->win_perm, lf->win_perm_before);
                 }
             }
 
@@ -654,10 +686,36 @@ int fim_alert (char *f_name, sk_sum_t *oldsum, sk_sum_t *newsum, Eventinfo *lf, 
             } else {
                 localsdb->inode[0] = '\0';
             }
+
+            /* Attributes message */
+            if (oldsum->attrs && newsum->attrs && oldsum->attrs != newsum->attrs) {
+                char *str_attr_before;
+                char *str_attr_after;
+                changes = 1;
+                os_calloc(OS_SIZE_256 + 1, sizeof(char), str_attr_before);
+                os_calloc(OS_SIZE_256 + 1, sizeof(char), str_attr_after);
+                decode_win_attributes(str_attr_before, oldsum->attrs);
+                decode_win_attributes(str_attr_after, newsum->attrs);
+                wm_strcat(&lf->fields[SK_ATTRS].value, "attributes", ',');
+                snprintf(localsdb->attrs, OS_SIZE_1024, "Old attributes were: '%s'\nNow they are '%s'\n", str_attr_before, str_attr_after);
+                lf->attrs_before = oldsum->attrs;
+                free(str_attr_before);
+                free(str_attr_after);
+            } else {
+                localsdb->attrs[0] = '\0';
+            }
+
             break;
         default:
             return (-1);
             break;
+    }
+
+    /* Symbolic path message */
+    if (newsum->symbolic_path && *newsum->symbolic_path) {
+        snprintf(localsdb->sym_path, OS_FLSIZE, "Symbolic path: '%s'.\n", newsum->symbolic_path);
+    } else {
+        *localsdb->sym_path = '\0';
     }
 
     // Provide information about the file
@@ -678,9 +736,12 @@ int fim_alert (char *f_name, sk_sum_t *oldsum, sk_sum_t *newsum, Eventinfo *lf, 
             "%s"
             "%s"
             "%s"
+            "%s"
+            "%s"
             "%s",
             f_name,
             msg_type,
+            localsdb->sym_path,
             localsdb->size,
             localsdb->perm,
             localsdb->owner,
@@ -688,6 +749,7 @@ int fim_alert (char *f_name, sk_sum_t *oldsum, sk_sum_t *newsum, Eventinfo *lf, 
             localsdb->md5,
             localsdb->sha1,
             localsdb->sha256,
+            localsdb->attrs,
             localsdb->mtime,
             localsdb->inode,
             localsdb->user_name,
@@ -705,9 +767,10 @@ int fim_alert (char *f_name, sk_sum_t *oldsum, sk_sum_t *newsum, Eventinfo *lf, 
     }
 
     if(lf->data) {
-        snprintf(localsdb->comment+comment_buf, OS_MAXSTR-comment_buf, "What changed:\n%s",
+        snprintf(localsdb->comment+comment_buf, OS_MAXSTR-comment_buf, "%s",
                 lf->data);
-        os_strdup(lf->data, lf->diff);
+        lf->diff = lf->data;
+        lf->data = NULL;
     }
 
     // Create a new log message
@@ -843,7 +906,7 @@ int fim_control_msg(char *key, time_t value, Eventinfo *lf, _sdb *sdb) {
         snprintf(msg, OS_SIZE_128, "end_scan");
     }
 
-    if (msg) {
+    if (*msg != '\0') {
         os_calloc(OS_SIZE_6144 + 1, sizeof(char), wazuhdb_query);
 
         snprintf(wazuhdb_query, OS_SIZE_6144, "agent %s syscheck scan_info_update %s %ld",
@@ -1016,8 +1079,15 @@ int fim_get_scantime (long *ts, Eventinfo *lf, _sdb *sdb) {
     }
 
     output = strchr(response, ' ');
-    *(output++) = '\0';
 
+    if (!output) {
+        merror("FIM decoder: Bad formatted response '%s'", response);
+        os_free(wazuhdb_query);
+        os_free(response);
+        return (-1);
+    }
+
+    *(output++) = '\0';
     *ts = atol(output);
 
     mdebug2("Agent '%s' FIM end_scan '%ld'", lf->agent_id, *ts);

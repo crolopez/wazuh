@@ -1,7 +1,8 @@
-/* Copyright (C) 2014 Daniel B. Cid
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2014 Daniel B. Cid
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -91,7 +92,7 @@ int main(int argc, char **argv)
 
     if (debug_level == 0) {
         /* Get debug level */
-        debug_level = getDefine_Int("monitord", "debug", 0, 2);
+        debug_level = getDefine_Int("integrator", "debug", 0, 2);
         while (debug_level != 0) {
             nowDebug();
             debug_level--;
@@ -112,9 +113,9 @@ int main(int argc, char **argv)
     /* Reading configuration */
     if(!OS_ReadIntegratorConf(cfg, &integrator_config) || !integrator_config[0])
     {
-        /* Not configured */
-        minfo("Remote integrations not configured. "
-                "Clean exit.");
+        if(!test_config) {
+            minfo("Remote integrations not configured. Clean exit.");
+        }
         exit(0);
     }
 
@@ -122,17 +123,22 @@ int main(int argc, char **argv)
     if(test_config)
         exit(0);
 
-    /* Pid before going into daemon mode. */
+     /* Pid before going into daemon mode. */
     i = getpid();
 
     /* Going on daemon mode */
-
     if (!run_foreground) {
         nowDaemon();
         goDaemonLight();
     }
 
-    /* Creating some randoness  */
+    if (!integrator_config[0]) {
+        /* Not configured */
+        minfo("Remote integrations not configured. Clean exit.");
+        exit(0);
+    }
+
+    /* Creating some randomness  */
     #ifdef __OpenBSD__
     srandomdev();
     #else

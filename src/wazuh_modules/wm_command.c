@@ -1,9 +1,9 @@
 /*
  * Wazuh Module for custom command execution
- * Copyright (C) 2017 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * October 26, 2017.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -20,7 +20,7 @@ cJSON *wm_command_dump(const wm_command_t * command);
 const wm_context WM_COMMAND_CONTEXT = {
     "command",
     (wm_routine)wm_command_main,
-    (wm_routine)wm_command_destroy,
+    (wm_routine)(void *)wm_command_destroy,
     (cJSON * (*)(const void *))wm_command_dump
 };
 
@@ -54,7 +54,12 @@ void * wm_command_main(wm_command_t * command) {
     if (command->md5_hash || command->sha1_hash || command->sha256_hash) {
 
         command_cpy = strdup(command->command);
-        argv = wm_strtok(command_cpy);
+
+        if (argv = wm_strtok(command_cpy), !argv) {
+            merror("Could not split command: %s", command_cpy);
+            pthread_exit(NULL);
+        }
+
         binary = argv[0];
 
         if (!wm_get_path(binary, &full_path)) {
@@ -145,7 +150,7 @@ void * wm_command_main(wm_command_t * command) {
         int i;
 
         for (i = 0; command->queue_fd = StartMQ(DEFAULTQPATH, WRITE), command->queue_fd < 0 && i < WM_MAX_ATTEMPTS; i++) {
-            sleep(WM_MAX_WAIT);
+            wm_delay(1000 * WM_MAX_WAIT);
         }
 
         if (i == WM_MAX_ATTEMPTS) {
@@ -160,21 +165,25 @@ void * wm_command_main(wm_command_t * command) {
     if (!command->run_on_start) {
         time_start = time(NULL);
 
+        // On first run, take into account the interval of time specified
+        if (command->interval && command->state.next_time == 0) {
+            command->state.next_time = time_start + command->interval;
+        }
+
         if (command->state.next_time > time_start) {
             mtinfo(WM_COMMAND_LOGTAG, "%s: Waiting for turn to evaluate.", command->tag);
-            sleep(command->state.next_time - time_start);
+            time_sleep = command->state.next_time - time_start;
+            wm_delay(1000 * time_sleep);
         }
     }
 
     while (1) {
-        int status = 0;
-        char * output = NULL;
-
         mtdebug1(WM_COMMAND_LOGTAG, "Starting command '%s'.", command->tag);
-
         // Get time and execute
         time_start = time(NULL);
 
+        int status = 0;
+        char *output = NULL;
         switch (wm_exec(command->full_command, command->ignore_output ? NULL : &output, &status, command->timeout, NULL)) {
         case 0:
             if (status > 0) {
@@ -184,18 +193,20 @@ void * wm_command_main(wm_command_t * command) {
                     mtdebug2(WM_COMMAND_LOGTAG, "OUTPUT: %s", output);
                 }
             }
-
+            break;
+        case WM_ERROR_TIMEOUT:
+            mterror(WM_COMMAND_LOGTAG, "%s: Timeout overtaken. You can modify your command timeout at ossec.conf. Exiting...", command->tag);
             break;
 
         default:
-            mterror(WM_COMMAND_LOGTAG, "%s: Timeout overtaken. You can modify your command timeout at ossec.conf. Exiting...", command->tag);
-            pthread_exit(NULL);
+            mterror(WM_COMMAND_LOGTAG, "Command '%s' failed.", command->tag);
+            break;
         }
 
-        if (!command->ignore_output) {
-            char * line;
-
-            for (line = strtok(output, "\n"); line; line = strtok(NULL, "\n")){
+        if (!command->ignore_output && output != NULL) {
+            char *line;
+            char *save_ptr;
+            for (line = strtok_r(output, "\n", &save_ptr); line; line = strtok_r(NULL, "\n", &save_ptr)){
             #ifdef WIN32
                 wm_sendmsg(usec, 0, line, extag, LOCALFILE_MQ);
             #else
@@ -203,7 +214,7 @@ void * wm_command_main(wm_command_t * command) {
             #endif
             }
 
-            free(output);
+            os_free(output);
         }
 
 
@@ -225,14 +236,14 @@ void * wm_command_main(wm_command_t * command) {
         }
 
         // If time_sleep=0, yield CPU
-        sleep(time_sleep);
+        wm_delay(1000 * time_sleep);
     }
 
     return NULL;
 }
 
 
-// Get readed data
+// Get read data
 
 cJSON *wm_command_dump(const wm_command_t * command) {
 

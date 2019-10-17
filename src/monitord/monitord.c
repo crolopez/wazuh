@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -137,6 +138,7 @@ cJSON *getMonitorInternalOptions(void) {
     cJSON_AddNumberToObject(monconf,"rotate_log",mond.rotate_log);
     cJSON_AddNumberToObject(monconf,"size_rotate",mond.size_rotate);
     cJSON_AddNumberToObject(monconf,"daily_rotations",mond.daily_rotations);
+    cJSON_AddNumberToObject(monconf,"delete_old_agents",mond.delete_old_agents);
 
     cJSON_AddItemToObject(root,"monitord",monconf);
 

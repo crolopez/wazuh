@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -16,7 +17,7 @@
 #include "external/cJSON/cJSON.h"
 #include <stdlib.h>
 
-#if defined(__MINGW32__) || defined(__hppa__)
+#if defined(__hppa__)
 static int setenv(const char *name, const char *val, __attribute__((unused)) int overwrite)
 {
     int len = strlen(name) + strlen(val) + 2;
@@ -70,6 +71,8 @@ char *chomp(char *str)
 
     return (str);
 }
+
+#ifndef CLIENT
 
 int add_agent(int json_output, int no_limit)
 {
@@ -215,15 +218,11 @@ int add_agent(int json_output, int no_limit)
         if (!OS_IsValidIP(ip, &c_ip)) {
             printf(IP_ERROR, ip);
             _ip = NULL;
-            free(c_ip.ip);
             c_ip.ip = NULL;
         } else if (!authd_running && (id_exist = IPExist(ip))) {
             double antiquity = OS_AgentAntiquity_ID(id_exist);
 
             if (env_remove_dup && (antiquity >= force_antiquity || antiquity < 0)) {
-#ifdef REUSE_ID
-                strncpy(id, id_exist, FILE_SIZE);
-#endif
                 OS_BackupAgentInfo_ID(id_exist);
                 OS_RemoveAgent(id_exist);
             } else {
@@ -381,7 +380,7 @@ int add_agent(int json_output, int no_limit)
                     } else
                         merror_exit("Lost authd socket connection.");
                 }
-                if (auth_add_agent(sock, id, name, ip, env_remove_dup ? force_antiquity : -1, json_output) < 0) {
+                if (auth_add_agent(sock, id, name, ip, NULL, env_remove_dup ? force_antiquity : -1, json_output,NULL,1) < 0) {
                     break;
                 }
             }
@@ -565,6 +564,8 @@ cleanup:
     auth_close(sock);
     return 0;
 }
+
+#endif
 
 int list_agents(int cmdlist)
 {

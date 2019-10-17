@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -9,6 +10,7 @@
 
 #include "shared.h"
 #include "log.h"
+#include "syscheck_op.h"
 #include "alerts.h"
 #include "getloglocation.h"
 #include "rules.h"
@@ -56,7 +58,7 @@ static void format_labels(char *buffer, size_t size, const Eventinfo *lf) {
     size_t z = 0;
 
     for (i = 0; lf->labels[i].key != NULL; i++) {
-        if (!lf->labels[i].flags.hidden || Config.show_hidden_labels) {
+        if (!lf->labels[i].flags.system && (!lf->labels[i].flags.hidden || Config.show_hidden_labels)) {
             z += (size_t)snprintf(buffer + z, size - z, "%s: %s\n",
                 lf->labels[i].key,
                 lf->labels[i].value);
@@ -103,7 +105,8 @@ void OS_Store_Flush(){
 void OS_LogOutput(Eventinfo *lf)
 {
     int i;
-    char labels[OS_MAXSTR];
+    char labels[OS_MAXSTR] = {0};
+    char * saveptr;
 
 #ifdef LIBGEOIP_ENABLED
     if (Config.geoipdb_file) {
@@ -189,25 +192,26 @@ void OS_LogOutput(Eventinfo *lf)
             printf(" - Size: %s\n", lf->size_after);
         }
 
-        if (lf->perm_after){
-            printf(" - Permissions: %6o\n", lf->perm_after);
-        }
         if (lf->mtime_after) {
             printf(" - Date: %s", ctime(&lf->mtime_after));
         }
+
         if (lf->inode_after) {
             printf(" - Inode: %ld\n", lf->inode_after);
         }
+
         if (lf->owner_after && lf->uname_after) {
             if (strcmp(lf->uname_after, "") != 0) {
                 printf(" - User: %s (%s)\n", lf->uname_after, lf->owner_after);
             }
         }
+
         if (lf->gowner_after && lf->gname_after) {
             if (strcmp(lf->gname_after, "") != 0) {
                 printf(" - Group: %s (%s)\n", lf->gname_after, lf->gowner_after);
             }
         }
+
         if (lf->md5_after) {
             if (strcmp(lf->md5_after, "xxx") != 0 && strcmp(lf->md5_after, "") != 0) {
                 printf(" - MD5: %s\n", lf->md5_after);
@@ -226,16 +230,36 @@ void OS_LogOutput(Eventinfo *lf)
             }
         }
 
+        if (lf->attrs_after != 0) {
+            char *attributes_list;
+            os_calloc(OS_SIZE_256 + 1, sizeof(char), attributes_list);
+            decode_win_attributes(attributes_list, lf->attrs_after);
+            printf(" - File attributes: %s\n", attributes_list);
+            free(attributes_list);
+        }
+
+        if (lf->perm_after){
+            printf(" - Permissions: %6o\n", lf->perm_after);
+        } else if (lf->win_perm_after && *lf->win_perm_after != '\0') {
+            char *permissions_list;
+            int size;
+            os_calloc(OS_SIZE_20480 + 1, sizeof(char), permissions_list);
+            if (size = decode_win_permissions(permissions_list, OS_SIZE_20480, lf->win_perm_after, 0, NULL), size > 1) {
+                os_realloc(permissions_list, size + 1, permissions_list);
+                printf(" - Permissions: \n%s", permissions_list);
+                free(permissions_list);
+            }
+        }
     }
 
     if (lf->filename && lf->sk_tag) {
         if (strcmp(lf->sk_tag, "") != 0) {
             printf("\nTags:\n");
             char * tag;
-            tag = strtok(lf->sk_tag, ",");
+            tag = strtok_r(lf->sk_tag, ",", &saveptr);
             while (tag != NULL) {
                 printf(" - %s\n", tag);
-                tag = strtok(NULL, ",");
+                tag = strtok_r(NULL, ",", &saveptr);
             }
         }
     }
@@ -268,7 +292,8 @@ void OS_LogOutput(Eventinfo *lf)
 void OS_Log(Eventinfo *lf)
 {
     int i;
-    char labels[OS_MAXSTR];
+    char labels[OS_MAXSTR] = {0};
+    char * saveptr;
 
 #ifdef LIBGEOIP_ENABLED
     if (Config.geoipdb_file) {
@@ -280,7 +305,6 @@ void OS_Log(Eventinfo *lf)
         }
     }
 #endif
-
     if (lf->labels && lf->labels[0].key) {
         format_labels(labels, OS_MAXSTR, lf);
     } else {
@@ -353,9 +377,6 @@ void OS_Log(Eventinfo *lf)
             fprintf(_aflog, " - Size: %s\n", lf->size_after);
         }
 
-        if (lf->perm_after){
-            fprintf(_aflog, " - Permissions: %6o\n", lf->perm_after);
-        }
         if (lf->mtime_after) {
             fprintf(_aflog, " - Date: %s", ctime(&lf->mtime_after));
         }
@@ -390,6 +411,26 @@ void OS_Log(Eventinfo *lf)
             }
         }
 
+        if (lf->attrs_after != 0) {
+            char *attributes_list;
+            os_calloc(OS_SIZE_256 + 1, sizeof(char), attributes_list);
+            decode_win_attributes(attributes_list, lf->attrs_after);
+            fprintf(_aflog, " - File attributes: %s\n", attributes_list);
+            free(attributes_list);
+        }
+
+        if (lf->perm_after) {
+            fprintf(_aflog, " - Permissions: %6o\n", lf->perm_after);
+        } else if (lf->win_perm_after && *lf->win_perm_after != '\0') {
+            char *permissions_list;
+            int size;
+            os_calloc(OS_SIZE_20480 + 1, sizeof(char), permissions_list);
+            if (size = decode_win_permissions(permissions_list, OS_SIZE_20480, lf->win_perm_after, 0, NULL), size > 1) {
+                os_realloc(permissions_list, size + 1, permissions_list);
+                fprintf(_aflog, " - Permissions: \n%s", permissions_list);
+                free(permissions_list);
+            }
+        }
     }
 
     if (lf->filename && lf->sk_tag) {
@@ -398,10 +439,10 @@ void OS_Log(Eventinfo *lf)
             os_strdup(lf->sk_tag, tags);
             fprintf(_aflog, "\nTags:\n");
             char * tag;
-            tag = strtok(tags, ",");
+            tag = strtok_r(tags, ",", &saveptr);
             while (tag != NULL) {
                 fprintf(_aflog, " - %s\n", tag);
-                tag = strtok(NULL, ",");
+                tag = strtok_r(NULL, ",", &saveptr);
             }
             free(tags);
         }

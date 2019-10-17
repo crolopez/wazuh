@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -71,7 +72,10 @@ char shost[512];
 int main(int argc, char **argv)
 {
     char *user_msg;
-    int c = 0, cmdlist = 0, json_output = 0, no_limit = 0;
+    int c = 0, cmdlist = 0, json_output = 0;
+#ifndef CLIENT
+    int no_limit = 0;
+#endif
     int force_antiquity;
     char *end;
     const char *cmdexport = NULL;
@@ -83,9 +87,6 @@ int main(int argc, char **argv)
     gid_t gid;
 #else
     FILE *fp;
-    TCHAR path[2048];
-    DWORD last_error;
-    int ret;
 #endif
 
     /* Set the name */
@@ -174,7 +175,9 @@ int main(int argc, char **argv)
                 setenv("OSSEC_REMOVE_DUPLICATED", optarg, 1);
                 break;
             case 'L':
+#ifndef CLIENT
                 no_limit = 1;
+#endif
                 break;
             default:
                 helpmsg();
@@ -238,33 +241,8 @@ int main(int argc, char **argv)
     /* Start signal handler */
     StartSIG2(ARGV0, manage_shutdown);
 #else
-    /* Get full path to the directory this executable lives in */
-    ret = GetModuleFileName(NULL, path, sizeof(path));
 
-    /* Check for errors */
-    if (!ret) {
-        merror_exit(GMF_ERROR);
-    }
-
-    /* Get last error */
-    last_error = GetLastError();
-
-    /* Look for errors */
-    if (last_error != ERROR_SUCCESS) {
-        if (last_error == ERROR_INSUFFICIENT_BUFFER) {
-            merror_exit(GMF_BUFF_ERROR, ret, sizeof(path));
-        } else {
-            merror_exit(GMF_UNKN_ERROR, last_error);
-        }
-    }
-
-    /* Remove file name from path */
-    PathRemoveFileSpec(path);
-
-    /* Move to correct directory */
-    if (chdir(path)) {
-        merror_exit(CHDIR_ERROR, path, errno, strerror(errno));
-    }
+    w_ch_exec_dir();
 
     /* Check permissions */
     fp = fopen(OSSECCONF, "r");
@@ -311,9 +289,9 @@ int main(int argc, char **argv)
             case 'a':
 #ifdef CLIENT
                 printf("\n ** Agent adding only available on a master ** \n\n");
-                break;
-#endif
+#else
                 add_agent(json_output, no_limit);
+#endif
                 break;
             case 'e':
             case 'E':

@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -54,8 +55,6 @@ int Read_GlobalSK(XML_NODE node, void *configp, __attribute__((unused)) void *ma
             merror(XML_VALUENULL, node[i]->element);
             return (OS_INVALID);
         } else if (strcmp(node[i]->element, xml_auto_ignore) == 0) {
-            Config->syscheck_ignore_frequency = 10;
-            Config->syscheck_ignore_time = 3600;
             if (strcmp(node[i]->content, "yes") == 0) {
                 Config->syscheck_auto_ignore = 1;
             } else if (strcmp(node[i]->content, "no") == 0) {
@@ -159,16 +158,8 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
     const char *xml_smtpserver = "smtp_server";
     const char *xml_heloserver = "helo_server";
     const char *xml_mailmaxperhour = "email_maxperhour";
-    const char * xml_queue_size = "queue_size";
-
-    /* Needed tags */
-    static char tags_present[MAX_NEEDED_TAGS] = {0};
-    char tag_list[MAX_NEEDED_TAGS][25] = {
-                                        "<jsonout_output>",
-                                        "<alerts_log>",
-                                        "<logall>",
-                                        "<logall_json>"
-                                        };
+    const char *xml_maillogsource = "email_log_source";
+    const char *xml_queue_size = "queue_size";
 
 #ifdef LIBGEOIP_ENABLED
     const char *xml_geoip_db_path = "geoip_db_path";
@@ -310,7 +301,6 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
         }
         /* jsonout output */
         else if (strcmp(node[i]->element, xml_jsonout_output) == 0) {
-            tags_present[JSONOUT_OUTPUT] = 1;
             if (strcmp(node[i]->content, "yes") == 0) {
                 if (Config) {
                     Config->jsonout_output = 1;
@@ -326,7 +316,6 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
         }
         /* Standard alerts output */
         else if (strcmp(node[i]->element, xml_alerts_log) == 0) {
-            tags_present[ALERTS_LOG] = 1;
             if (strcmp(node[i]->content, "yes") == 0) {
                 if (Config) {
                     Config->alerts_log = 1;
@@ -342,7 +331,6 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
         }
         /* Log all */
         else if (strcmp(node[i]->element, xml_logall) == 0) {
-            tags_present[LOGALL] = 1;
             if (strcmp(node[i]->content, "yes") == 0) {
                 if (Config) {
                     Config->logall = 1;
@@ -358,7 +346,6 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
         }
         /* Log all JSON*/
         else if (strcmp(node[i]->element, xml_logall_json) == 0) {
-            tags_present[LOGALL_JSON] = 1;
             if (strcmp(node[i]->content, "yes") == 0) {
                 if (Config) {
                     Config->logall_json = 1;
@@ -430,8 +417,8 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
 #ifndef WIN32
 
             const char *ip_address_regex =
-                "^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}/?"
-                "([0-9]{0,2}|[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})$";
+                "^!?[[:digit:]]{1,3}(\\.[[:digit:]]{1,3}){3}"
+                "(/[[:digit:]]{1,2}([[:digit:]](\\.[[:digit:]]{1,3}){3})?)?$";
 
             if (Config && OS_PRegex(node[i]->content, ip_address_regex)) {
                 white_size++;
@@ -527,20 +514,12 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
             }
         } else if (strcmp(node[i]->element, xml_smtpserver) == 0) {
 #ifndef WIN32
-            if (Mail && (Mail->mn)) {
-                if (node[i]->content[0] == '/') {
-                    os_strdup(node[i]->content, Mail->smtpserver);
-                } else {
-                    Mail->smtpserver = OS_GetHost(node[i]->content, 5);
-                    if (!Mail->smtpserver) {
-                        merror(INVALID_SMTP, node[i]->content);
-                        return (OS_INVALID);
-                    }
-                }
+            if (Mail) {
+                os_strdup(node[i]->content, Mail->smtpserver);
             }
 #endif
         } else if (strcmp(node[i]->element, xml_heloserver) == 0) {
-            if (Mail && (Mail->mn)) {
+            if (Mail) {
                 os_strdup(node[i]->content, Mail->heloserver);
             }
         } else if (strcmp(node[i]->element, xml_mailmaxperhour) == 0) {
@@ -551,9 +530,26 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
                 }
                 Mail->maxperhour = atoi(node[i]->content);
 
-                if ((Mail->maxperhour <= 0) || (Mail->maxperhour > 9999)) {
+                if ((Mail->maxperhour <= 0) || (Mail->maxperhour > 1000000)) {
                     merror(XML_VALUEERR, node[i]->element, node[i]->content);
                     return (OS_INVALID);
+                }
+            }
+        } else if (strcmp(node[i]->element, xml_maillogsource) == 0) {
+            if (Mail) {
+                if (OS_StrIsNum(node[i]->content)) {
+                    merror(XML_VALUEERR, node[i]->element, node[i]->content);
+                    return (OS_INVALID);
+                }
+
+                if(strncmp(node[i]->content,"alerts.log",10) == 0){
+                    Mail->source = MAIL_SOURCE_LOGS;
+                }
+                else if(strncmp(node[i]->content,"alerts.json",11) == 0){
+                    Mail->source = MAIL_SOURCE_JSON;
+                }
+                else{
+                    Mail->source = MAIL_SOURCE_JSON;
                 }
             }
         }
@@ -657,24 +653,12 @@ int Read_Global(XML_NODE node, void *configp, void *mailp)
                     return OS_INVALID;
                 }
 
-                if (*end) {
-                    merror("Invalid value for option '<%s>'", xml_queue_size);
-                    return OS_INVALID;
-                }
             }
         } else {
             merror(XML_INVELEM, node[i]->element);
             return (OS_INVALID);
         }
         i++;
-    }
-
-    /* Check if mandatory tags are present */
-    int k;
-    for(k = 0; k < MAX_NEEDED_TAGS;k++){
-        if(tags_present[k] == 0) {
-            merror_exit("Label %s not defined",tag_list[k]);
-        }
     }
 
     return (0);
@@ -774,7 +758,7 @@ void config_free(_Config *config) {
         free(config->geoip_db_path);
     }
     if (config->geoip6_db_path) {
-        free(config->geoip_db_path);
+        free(config->geoip6_db_path);
     }
 #endif
 

@@ -1,9 +1,9 @@
 /*
  * Wazuh Integration with Osquery
- * Copyright (C) 2018 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * April 5, 2018.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -25,11 +25,17 @@
 #define OSQUERYD_BIN "osqueryd"
 #endif
 
-#define minfo(format, ...) mtinfo(WM_OSQUERYMONITOR_LOGTAG, format, ##__VA_ARGS__)
-#define mwarn(format, ...) mtwarn(WM_OSQUERYMONITOR_LOGTAG, format, ##__VA_ARGS__)
-#define merror(format, ...) mterror(WM_OSQUERYMONITOR_LOGTAG, format, ##__VA_ARGS__)
-#define mdebug1(format, ...) mtdebug1(WM_OSQUERYMONITOR_LOGTAG, format, ##__VA_ARGS__)
-#define mdebug2(format, ...) mtdebug2(WM_OSQUERYMONITOR_LOGTAG, format, ##__VA_ARGS__)
+#undef minfo
+#undef mwarn
+#undef merror
+#undef mdebug1
+#undef mdebug2
+
+#define minfo(msg, ...) _mtinfo(WM_OSQUERYMONITOR_LOGTAG, __FILE__, __LINE__, __func__, msg, ##__VA_ARGS__)
+#define mwarn(msg, ...) _mtwarn(WM_OSQUERYMONITOR_LOGTAG, __FILE__, __LINE__, __func__, msg, ##__VA_ARGS__)
+#define merror(msg, ...) _mterror(WM_OSQUERYMONITOR_LOGTAG, __FILE__, __LINE__, __func__, msg, ##__VA_ARGS__)
+#define mdebug1(msg, ...) _mtdebug1(WM_OSQUERYMONITOR_LOGTAG, __FILE__, __LINE__, __func__, msg, ##__VA_ARGS__)
+#define mdebug2(msg, ...) _mtdebug2(WM_OSQUERYMONITOR_LOGTAG, __FILE__, __LINE__, __func__, msg, ##__VA_ARGS__)
 
 static void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery_monitor);
 static void wm_osquery_monitor_destroy(wm_osquery_monitor_t *osquery_monitor);
@@ -43,7 +49,7 @@ static volatile int active = 1;
 const wm_context WM_OSQUERYMONITOR_CONTEXT = {
     "osquery",
     (wm_routine)wm_osquery_monitor_main,
-    (wm_routine)wm_osquery_monitor_destroy,
+    (wm_routine)(void *)wm_osquery_monitor_destroy,
     (cJSON * (*)(const void *))wm_osquery_dump
 };
 
@@ -98,6 +104,8 @@ void *Read_Log(wm_osquery_monitor_t * osquery)
         // Read the file
 
         while (active) {
+            clearerr(result_log);
+
             // Get file until EOF
 
             while (fgets(line, OS_MAXSTR, result_log)) {
@@ -108,7 +116,8 @@ void *Read_Log(wm_osquery_monitor_t * osquery)
                     *end = '\0';
                 }
 
-                if (osquery_json = cJSON_Parse(line), osquery_json) {
+                const char *jsonErrPtr;
+                if (osquery_json = cJSON_ParseWithOpts(line, &jsonErrPtr, 0), osquery_json) {
 
                     // Nest object into a "osquery" object
 
@@ -420,7 +429,7 @@ int wm_osquery_decorators(wm_osquery_monitor_t * osquery)
 
     // Load original osquery configuration
 
-    if (root = json_fread(osquery->config_path), !root) {
+    if (root = json_fread(osquery->config_path, 1), !root) {
         if (errno) {
             merror("Couldn't load configuration file '%s': %s (%d)", osquery->config_path, strerror(errno), errno);
         } else {
@@ -475,7 +484,7 @@ int wm_osquery_decorators(wm_osquery_monitor_t * osquery)
     // Write new configuration
 
     if (json_fwrite(osquery->config_path, root) < 0) {
-        merror("At %s(): couldn't write JSON content into configuration '%s': %s (%d)", __func__, osquery->config_path, strerror(errno), errno);
+        merror("Couldn't write JSON content into configuration '%s': %s (%d)", osquery->config_path, strerror(errno), errno);
         goto end;
     }
 
@@ -504,7 +513,7 @@ int wm_osquery_packs(wm_osquery_monitor_t *osquery)
 
     // Load original osquery configuration
 
-    if (root = json_fread(osquery->config_path), !root) {
+    if (root = json_fread(osquery->config_path, 1), !root) {
         if (errno) {
             merror("Couldn't load configuration file '%s': %s (%d)", osquery->config_path, strerror(errno), errno);
         } else {
@@ -549,7 +558,7 @@ int wm_osquery_packs(wm_osquery_monitor_t *osquery)
     // Write new configuration
 
     if (json_fwrite(osquery->config_path, root) < 0) {
-        merror("At %s(): couldn't write JSON content into configuration '%s': %s (%d)", __func__, osquery->config_path, strerror(errno), errno);
+        merror("Couldn't write JSON content into configuration '%s': %s (%d)", osquery->config_path, strerror(errno), errno);
         retval = -1;
     }
 
@@ -559,7 +568,8 @@ int wm_osquery_packs(wm_osquery_monitor_t *osquery)
 
 void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery)
 {
-    pthread_t tlauncher, treader;
+    pthread_t tlauncher = 0;
+    pthread_t treader = 0;
 
     if (osquery->disable) {
         minfo("Module disabled. Exiting...");
@@ -586,6 +596,11 @@ void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery)
 
 #endif
 
+    if( pthread_create(&treader, NULL, (void *)&Read_Log, osquery) != 0){
+        merror("Error while creating Read_Log thread.");
+        return NULL;
+    }
+
     if (osquery->run_daemon) {
         // Handle configuration
 
@@ -594,20 +609,12 @@ void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery)
         }
 
         if( pthread_create(&tlauncher, NULL, (void *)&Execute_Osquery, osquery) != 0){
-            merror("creating thread Execute_Osquery");
+            merror("Error while creating Execute_Osquery thread.");
             return NULL;
         }
+        pthread_join(tlauncher, NULL);
     } else {
         minfo("run_daemon disabled, finding detached osquery process results.");
-    }
-
-    if( pthread_create(&treader, NULL, (void *)&Read_Log, osquery) != 0){
-        merror("creating thread Read_Log");
-        return NULL;
-    }
-
-    if (osquery->run_daemon) {
-        pthread_join(tlauncher, NULL);
     }
 
     pthread_join(treader, NULL);
@@ -637,7 +644,7 @@ void wm_osquery_monitor_destroy(wm_osquery_monitor_t *osquery_monitor)
 }
 
 
-// Get readed data
+// Get read data
 cJSON *wm_osquery_dump(const wm_osquery_monitor_t *osquery_monitor) {
 
     cJSON *root = cJSON_CreateObject();

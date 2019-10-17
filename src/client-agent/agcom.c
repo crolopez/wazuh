@@ -1,8 +1,8 @@
 /* Remote request listener
- * Copyright (C) 2018 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * Mar 12, 2018.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -51,7 +51,7 @@ size_t agcom_getconfig(const char * section, char ** output) {
             json_str = cJSON_PrintUnformatted(cfg);
             wm_strcat(output, json_str, ' ');
             free(json_str);
-            cJSON_free(cfg);
+            cJSON_Delete(cfg);
             return strlen(*output);
         } else {
             goto error;
@@ -62,7 +62,7 @@ size_t agcom_getconfig(const char * section, char ** output) {
             json_str = cJSON_PrintUnformatted(cfg);
             wm_strcat(output, json_str, ' ');
             free(json_str);
-            cJSON_free(cfg);
+            cJSON_Delete(cfg);
             return strlen(*output);
         } else {
             goto error;
@@ -73,7 +73,7 @@ size_t agcom_getconfig(const char * section, char ** output) {
             json_str = cJSON_PrintUnformatted(cfg);
             wm_strcat(output, json_str, ' ');
             free(json_str);
-            cJSON_free(cfg);
+            cJSON_Delete(cfg);
             return strlen(*output);
         } else {
             goto error;
@@ -84,7 +84,7 @@ size_t agcom_getconfig(const char * section, char ** output) {
             json_str = cJSON_PrintUnformatted(cfg);
             wm_strcat(output, json_str, ' ');
             free(json_str);
-            cJSON_free(cfg);
+            cJSON_Delete(cfg);
             return strlen(*output);
         } else {
             goto error;

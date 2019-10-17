@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -15,11 +16,6 @@
 #include "decoder.h"
 #include "plugin_decoders.h"
 #include "config.h"
-
-#ifdef TESTRULE
-#undef XML_LDECODER
-#define XML_LDECODER "etc/local_decoder.xml"
-#endif
 
 /* Internal functions */
 static char *_loadmemory(char *at, char *str);
@@ -204,8 +200,10 @@ int ReadDecodeXML(const char *file)
 
     /* Check if the file is empty */
     if(FileSize(file) == 0){
-        retval = 0;
-        goto cleanup;
+        if (strcmp(file, XML_LDECODER) != 0) {
+            retval = 0;
+            goto cleanup;
+        }
     }
 
     /* Get the root elements */
@@ -235,8 +233,11 @@ int ReadDecodeXML(const char *file)
     while (node[i]) {
         int j = 0;
 
-        if (!node[i]->element ||
-                strcasecmp(node[i]->element, xml_decoder) != 0) {
+        if (!node[i]->element) {
+            goto cleanup;
+        }
+
+        if (strcasecmp(node[i]->element, xml_decoder) != 0) {
             merror(XML_INVELEM, node[i]->element);
             goto cleanup;
         }
@@ -251,7 +252,7 @@ int ReadDecodeXML(const char *file)
 
         /* Check for additional entries */
         if (node[i]->attributes[1] && node[i]->values[1]) {
-            if (strcasecmp(node[i]->attributes[0], xml_decoder_status) != 0) {
+            if (strcasecmp(node[i]->attributes[1], xml_decoder_status) != 0) {
                 merror(XML_INVELEM, node[i]->element);
                 goto cleanup;
             }
@@ -388,6 +389,7 @@ int ReadDecodeXML(const char *file)
 
             /* Get the FTS comment */
             else if (strcasecmp(elements[j]->element, xml_ftscomment) == 0) {
+                pi->ftscomment = _loadmemory(pi->ftscomment, elements[j]->content);
             }
 
             else if (strcasecmp(elements[j]->element, xml_usename) == 0) {
@@ -513,7 +515,7 @@ int ReadDecodeXML(const char *file)
                     } else if (!strcmp(word, "data")) {
                         pi->order[order_int] = Data_FP;
                     } else if (!strcmp(word, "extra_data")) {
-                        pi->order[order_int] = Data_FP;
+                        pi->order[order_int] = Extra_Data_FP;
                     } else if (!strcmp(word, "status")) {
                         pi->order[order_int] = Status_FP;
                     } else if (!strcmp(word, "system_name")) {
@@ -587,18 +589,19 @@ int ReadDecodeXML(const char *file)
                         pi->fts |= FTS_NAME;
                     } else {
                         int i;
+                        if (pi->fields) {
+                            for (i = 0; pi->fields[i]; i++)
+                                if (!strcasecmp(pi->fields[i], word))
+                                    break;
 
-                        for (i = 0; pi->fields[i]; i++)
-                            if (!strcasecmp(pi->fields[i], word))
-                                break;
 
+                            if (!pi->fields[i])
+                                merror_exit("decode-xml: Wrong field '%s' in the fts"
+                                        " decoder '%s'", *norder, pi->name);
 
-                        if (!pi->fields[i])
-                            merror_exit("decode-xml: Wrong field '%s' in the fts"
-                                      " decoder '%s'", *norder, pi->name);
-
-                        pi->fts |= FTS_DYNAMIC;
-                        pi->fts_fields[i] = 1;
+                            pi->fts |= FTS_DYNAMIC;
+                            pi->fts_fields[i] = 1;
+                        }
                     }
 
                     free(*norder);
@@ -779,6 +782,8 @@ int SetDecodeXML()
     addDecoder2list(HOSTINFO_MOD);
     addDecoder2list(SYSCOLLECTOR_MOD);
     addDecoder2list(CISCAT_MOD);
+    addDecoder2list(WINEVT_MOD);
+    addDecoder2list(SCA_MOD);
 
     /* Set ids - for our two lists */
     if (!os_setdecoderids(NULL)) {

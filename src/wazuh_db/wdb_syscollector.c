@@ -1,9 +1,9 @@
 /*
  * Wazuh SQLite integration
- * Copyright (C) 2017 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * August 30, 2017.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -111,17 +111,25 @@ int wdb_netinfo_insert(wdb_t * wdb, const char * scan_id, const char * scan_time
         sqlite3_bind_null(stmt, 16);
     }
 
-    if (sqlite3_step(stmt) == SQLITE_DONE){
-        return 0;
-    }
-    else {
-        merror("at wdb_netinfo_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
-        return -1;
+    switch (sqlite3_step(stmt)) {
+        case SQLITE_DONE:
+            return 0;
+        case SQLITE_CONSTRAINT:
+            if (!strncmp(sqlite3_errmsg(wdb->db), "UNIQUE", 6)) {
+                mdebug1("at wdb_package_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
+                return 0;
+            } else {
+                merror("at wdb_package_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
+                return -1;
+            }
+        default:
+            merror("at wdb_package_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
+            return -1;
     }
 }
 
 // Save IPv4/IPv6 protocol info into DB.
-int wdb_netproto_save(wdb_t * wdb, const char * scan_id, const char * iface, int type, const char * gateway, const char * dhcp) {
+int wdb_netproto_save(wdb_t * wdb, const char * scan_id, const char * iface, int type, const char * gateway, const char * dhcp, int metric) {
 
     if (!wdb->transaction && wdb_begin2(wdb) < 0){
         mdebug1("at wdb_netproto_save(): cannot begin transaction");
@@ -133,7 +141,8 @@ int wdb_netproto_save(wdb_t * wdb, const char * scan_id, const char * iface, int
         iface,
         type,
         gateway,
-        dhcp) < 0) {
+        dhcp,
+        metric) < 0) {
 
         return -1;
     }
@@ -142,7 +151,7 @@ int wdb_netproto_save(wdb_t * wdb, const char * scan_id, const char * iface, int
 }
 
 // Insert IPv4/IPv6 protocol info tuple. Return 0 on success or -1 on error.
-int wdb_netproto_insert(wdb_t * wdb, const char * scan_id, const char * iface, int type, const char * gateway, const char * dhcp) {
+int wdb_netproto_insert(wdb_t * wdb, const char * scan_id, const char * iface, int type, const char * gateway, const char * dhcp, int metric) {
 
     sqlite3_stmt *stmt = NULL;
 
@@ -164,17 +173,31 @@ int wdb_netproto_insert(wdb_t * wdb, const char * scan_id, const char * iface, i
     sqlite3_bind_text(stmt, 4, gateway, -1, NULL);
     sqlite3_bind_text(stmt, 5, dhcp, -1, NULL);
 
-    if (sqlite3_step(stmt) == SQLITE_DONE){
-        return 0;
+    if (metric >= 0) {
+        sqlite3_bind_int64(stmt, 6, metric);
+    } else {
+        sqlite3_bind_null(stmt, 6);
     }
-    else {
-        merror("at wdb_netproto_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
-        return -1;
+
+    switch (sqlite3_step(stmt)) {
+        case SQLITE_DONE:
+            return 0;
+        case SQLITE_CONSTRAINT:
+            if (!strncmp(sqlite3_errmsg(wdb->db), "UNIQUE", 6)) {
+                mdebug1("at wdb_netproto_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
+                return 0;
+            } else {
+                merror("at wdb_netproto_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
+                return -1;
+            }
+        default:
+            merror("at wdb_netproto_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
+            return -1;
     }
 }
 
 // Save IPv4/IPv6 address info into DB.
-int wdb_netaddr_save(wdb_t * wdb, const char * scan_id, int proto, const char * address, const char * netmask, const char * broadcast) {
+int wdb_netaddr_save(wdb_t * wdb, const char * scan_id, const char * iface, int proto, const char * address, const char * netmask, const char * broadcast) {
 
     if (!wdb->transaction && wdb_begin2(wdb) < 0){
         mdebug1("at wdb_netaddr_save(): cannot begin transaction");
@@ -183,6 +206,7 @@ int wdb_netaddr_save(wdb_t * wdb, const char * scan_id, int proto, const char * 
 
     if (wdb_netaddr_insert(wdb,
         scan_id,
+		iface,
         proto,
         address,
         netmask,
@@ -195,7 +219,7 @@ int wdb_netaddr_save(wdb_t * wdb, const char * scan_id, int proto, const char * 
 }
 
 // Insert IPv4/IPv6 address info tuple. Return 0 on success or -1 on error.
-int wdb_netaddr_insert(wdb_t * wdb, const char * scan_id, int proto, const char * address, const char * netmask, const char * broadcast) {
+int wdb_netaddr_insert(wdb_t * wdb, const char * scan_id, const char * iface, int proto, const char * address, const char * netmask, const char * broadcast) {
 
     sqlite3_stmt *stmt = NULL;
 
@@ -207,15 +231,16 @@ int wdb_netaddr_insert(wdb_t * wdb, const char * scan_id, int proto, const char 
     stmt = wdb->stmt[WDB_STMT_ADDR_INSERT];
 
     sqlite3_bind_text(stmt, 1, scan_id, -1, NULL);
+    sqlite3_bind_text(stmt, 2, iface, -1, NULL);
 
     if (proto == WDB_NETADDR_IPV4)
-        sqlite3_bind_text(stmt, 2, "ipv4", -1, NULL);
+        sqlite3_bind_text(stmt, 3, "ipv4", -1, NULL);
     else
-        sqlite3_bind_text(stmt, 2, "ipv6", -1, NULL);
+        sqlite3_bind_text(stmt, 3, "ipv6", -1, NULL);
 
-    sqlite3_bind_text(stmt, 3, address, -1, NULL);
-    sqlite3_bind_text(stmt, 4, netmask, -1, NULL);
-    sqlite3_bind_text(stmt, 5, broadcast, -1, NULL);
+    sqlite3_bind_text(stmt, 4, address, -1, NULL);
+    sqlite3_bind_text(stmt, 5, netmask, -1, NULL);
+    sqlite3_bind_text(stmt, 6, broadcast, -1, NULL);
 
     if (sqlite3_step(stmt) == SQLITE_DONE){
         return 0;
@@ -281,8 +306,35 @@ int wdb_netinfo_delete(wdb_t * wdb, const char * scan_id) {
     return 0;
 }
 
+// Function to delete old Hotfix information from DB. Return 0 on success or -1 on error.
+int wdb_hotfix_delete(wdb_t * wdb, const char * scan_id) {
+
+    sqlite3_stmt *stmt = NULL;
+
+    if (!wdb->transaction && wdb_begin2(wdb) < 0) {
+        mdebug1("at wdb_hotfix_delete(): cannot begin transaction");
+        return -1;
+    }
+
+    if (wdb_stmt_cache(wdb, WDB_STMT_HOTFIX_DEL) < 0) {
+        mdebug1("at wdb_hotfix_delete(): cannot cache statement");
+        return -1;
+    }
+
+    stmt = wdb->stmt[WDB_STMT_HOTFIX_DEL];
+
+    sqlite3_bind_text(stmt, 1, scan_id, -1, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        merror("Deleting old information from 'sys_hotfixes' table: %s", sqlite3_errmsg(wdb->db));
+        return -1;
+    }
+
+    return 0;
+}
+
 // Function to save OS info into the DB. Return 0 on success or -1 on error.
-int wdb_osinfo_save(wdb_t * wdb, const char * scan_id, const char * scan_time, const char * hostname, const char * architecture, const char * os_name, const char * os_version, const char * os_codename, const char * os_major, const char * os_minor, const char * os_build, const char * os_platform, const char * sysname, const char * release, const char * version) {
+int wdb_osinfo_save(wdb_t * wdb, const char * scan_id, const char * scan_time, const char * hostname, const char * architecture, const char * os_name, const char * os_version, const char * os_codename, const char * os_major, const char * os_minor, const char * os_build, const char * os_platform, const char * sysname, const char * release, const char * version, const char * os_release) {
 
     sqlite3_stmt *stmt = NULL;
 
@@ -318,7 +370,8 @@ int wdb_osinfo_save(wdb_t * wdb, const char * scan_id, const char * scan_time, c
         os_platform,
         sysname,
         release,
-        version) < 0) {
+        version,
+        os_release) < 0) {
 
         return -1;
     }
@@ -327,7 +380,7 @@ int wdb_osinfo_save(wdb_t * wdb, const char * scan_id, const char * scan_time, c
 }
 
 // Insert OS info tuple. Return 0 on success or -1 on error. (v2)
-int wdb_osinfo_insert(wdb_t * wdb, const char * scan_id, const char * scan_time, const char * hostname, const char * architecture, const char * os_name, const char * os_version, const char * os_codename, const char * os_major, const char * os_minor, const char * os_build, const char * os_platform, const char * sysname, const char * release, const char * version) {
+int wdb_osinfo_insert(wdb_t * wdb, const char * scan_id, const char * scan_time, const char * hostname, const char * architecture, const char * os_name, const char * os_version, const char * os_codename, const char * os_major, const char * os_minor, const char * os_build, const char * os_platform, const char * sysname, const char * release, const char * version, const char * os_release) {
     sqlite3_stmt *stmt = NULL;
 
     if (wdb_stmt_cache(wdb, WDB_STMT_OSINFO_INSERT) < 0) {
@@ -351,6 +404,7 @@ int wdb_osinfo_insert(wdb_t * wdb, const char * scan_id, const char * scan_time,
     sqlite3_bind_text(stmt, 12, sysname, -1, NULL);
     sqlite3_bind_text(stmt, 13, release, -1, NULL);
     sqlite3_bind_text(stmt, 14, version, -1, NULL);
+    sqlite3_bind_text(stmt, 15, os_release, -1, NULL);
 
     if (sqlite3_step(stmt) == SQLITE_DONE){
         return 0;
@@ -388,6 +442,20 @@ int wdb_package_save(wdb_t * wdb, const char * scan_id, const char * scan_time, 
         location,
         0) < 0) {
 
+        return -1;
+    }
+
+    return 0;
+}
+
+// Function to save Hotfix info into the DB. Return 0 on success or -1 on error.
+int wdb_hotfix_save(wdb_t * wdb, const char * scan_id, const char * scan_time, const char *hotfix) {
+    if (!wdb->transaction && wdb_begin2(wdb) < 0){
+        mdebug1("at wdb_hotfix_save(): cannot begin transaction");
+        return -1;
+    }
+
+    if (wdb_hotfix_insert(wdb, scan_id, scan_time, hotfix) < 0) {
         return -1;
     }
 
@@ -440,6 +508,30 @@ int wdb_package_insert(wdb_t * wdb, const char * scan_id, const char * scan_time
         default:
             merror("at wdb_package_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
             return -1;
+    }
+}
+
+// Insert hotfix info tuple. Return 0 on success or -1 on error.
+int wdb_hotfix_insert(wdb_t * wdb, const char * scan_id, const char * scan_time, const char *hotfix) {
+    sqlite3_stmt *stmt = NULL;
+
+    if (wdb_stmt_cache(wdb, WDB_STMT_HOTFIX_INSERT) < 0) {
+        mdebug1("at wdb_hotfix_insert(): cannot cache statement");
+    }
+
+    stmt = wdb->stmt[WDB_STMT_HOTFIX_INSERT];
+
+    sqlite3_bind_text(stmt, 1, scan_id, -1, NULL);
+    sqlite3_bind_text(stmt, 2, scan_time, -1, NULL);
+    sqlite3_bind_text(stmt, 3, hotfix, -1, NULL);
+
+
+    if (sqlite3_step(stmt) == SQLITE_DONE){
+        return 0;
+    }
+    else {
+        merror("at wdb_hotfix_insert(): sqlite3_step(): %s", sqlite3_errmsg(wdb->db));
+        return -1;
     }
 }
 
@@ -559,7 +651,17 @@ int wdb_hardware_insert(wdb_t * wdb, const char * scan_id, const char * scan_tim
         sqlite3_bind_null(stmt, 5);
     }
 
-    sqlite3_bind_text(stmt, 6, cpu_mhz, -1, NULL);
+    double cpumhz = 0;
+    if (cpu_mhz == NULL || strlen(cpu_mhz) == 0) {
+        cpumhz = 0;
+    } else {
+        cpumhz = atof(cpu_mhz);
+    }
+    if (cpumhz > 0) {
+        sqlite3_bind_double(stmt, 6, cpumhz);
+    } else {
+        sqlite3_bind_null(stmt, 6);
+    }
 
     if (ram_total > 0) {
         sqlite3_bind_int64(stmt, 7, ram_total);
@@ -795,14 +897,12 @@ int wdb_process_insert(wdb_t * wdb, const char * scan_id, const char * scan_time
     sqlite3_bind_text(stmt, 15, rgroup, -1, NULL);
     sqlite3_bind_text(stmt, 16, sgroup, -1, NULL);
     sqlite3_bind_text(stmt, 17, fgroup, -1, NULL);
-    if (priority >= 0)
+    if (priority >= 0) {
         sqlite3_bind_int(stmt, 18, priority);
-    else
+    } else {
         sqlite3_bind_null(stmt, 18);
-    if (nice >= 0)
-        sqlite3_bind_int(stmt, 19, nice);
-    else
-        sqlite3_bind_null(stmt, 19);
+    }
+    sqlite3_bind_int(stmt, 19, nice);
     if (size >= 0)
         sqlite3_bind_int(stmt, 20, size);
     else

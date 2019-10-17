@@ -1,8 +1,8 @@
 /* Remote request listener
- * Copyright (C) 2018 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * Mar 28, 2018.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -50,7 +50,7 @@ size_t lessdcom_getconfig(const char * section, char ** output) {
             json_str = cJSON_PrintUnformatted(cfg);
             wm_strcat(output, json_str, ' ');
             free(json_str);
-            cJSON_free(cfg);
+            cJSON_Delete(cfg);
             return strlen(*output);
         } else {
             goto error;
@@ -77,7 +77,7 @@ void * lessdcom_main(__attribute__((unused)) void * arg) {
     mdebug1("Local requests thread ready");
 
     if (sock = OS_BindUnixDomain(DEFAULTDIR LESSD_LOCAL_SOCK, SOCK_STREAM, OS_MAXSTR), sock < 0) {
-        merror("Unable to bind to socket '%s'. Closing local server.", LESSD_LOCAL_SOCK);
+        merror("Unable to bind to socket '%s': (%d) %s.", LESSD_LOCAL_SOCK, errno, strerror(errno));
         return NULL;
     }
 
@@ -109,6 +109,10 @@ void * lessdcom_main(__attribute__((unused)) void * arg) {
 
         os_calloc(OS_MAXSTR, sizeof(char), buffer);
         switch (length = OS_RecvSecureTCP(peer, buffer,OS_MAXSTR), length) {
+        case OS_SOCKTERR:
+            merror("At lessdcom_main(): OS_RecvSecureTCP(): response size is bigger than expected");
+            break;
+
         case -1:
             merror("At lessdcom_main(): OS_RecvSecureTCP(): %s", strerror(errno));
             break;

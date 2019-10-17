@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -130,6 +131,7 @@ int main(int argc, char **argv)
     if (argc < 2) {
         printf("%s: Invalid syntax.\n", argv[0]);
         printf("Try: '%s <file_name>'\n\n", argv[0]);
+        return 0;
     }
 
     /* Look for the quiet option */

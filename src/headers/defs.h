@@ -1,7 +1,8 @@
-/* Copyright (C) 2009-2012 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009-2012 Trend Micro Inc.
  * All rights reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -9,8 +10,8 @@
 
 /* Global Definitions */
 
-#ifndef __OS_HEADERS
-#define __OS_HEADERS
+#ifndef OS_HEADERS
+#define OS_HEADERS
 
 #define TRUE            1
 #define FALSE           0
@@ -24,11 +25,13 @@
 /* Size limit control */
 #define OS_SIZE_65536   65536
 #define OS_SIZE_61440   61440
+#define OS_SIZE_20480   20480
 #define OS_SIZE_8192    8192
 #define OS_SIZE_6144    6144
 #define OS_SIZE_4096    4096
 #define OS_SIZE_2048    2048
 #define OS_SIZE_1024    1024
+#define OS_SIZE_512     512
 #define OS_SIZE_256     256
 #define OS_SIZE_128     128
 
@@ -45,7 +48,7 @@
 #define OS_HEADER_SIZE  OS_SIZE_128     /* Maximum header size          */
 #define OS_LOG_HEADER   OS_SIZE_256     /* Maximum log header size      */
 #define OS_SK_HEADER    OS_SIZE_6144    /* Maximum syscheck header size */
-#define IPSIZE          16              /* IP Address size              */
+#define IPSIZE          INET6_ADDRSTRLEN /* IP Address size             */
 #define AUTH_POOL       1000            /* Max number of connections    */
 #define BACKLOG         128             /* Socket input queue length    */
 #define MAX_EVENTS      1024            /* Max number of epoll events   */
@@ -58,7 +61,7 @@
 
 /* Some global names */
 #define __ossec_name    "Wazuh"
-#define __ossec_version "v3.7.0"
+#define __ossec_version "v3.11.0"
 #define __author        "Wazuh Inc."
 #define __contact       "info@wazuh.com"
 #define __site          "http://www.wazuh.com"
@@ -120,6 +123,7 @@ https://www.gnu.org/licenses/gpl.html\n"
 
 // Authd local socket
 #define AUTH_LOCAL_SOCK "/queue/ossec/auth"
+#define AUTH_LOCAL_SOCK_PATH DEFAULTDIR AUTH_LOCAL_SOCK
 
 // Remote requests socket
 #define REMOTE_REQ_SOCK "/queue/ossec/request"
@@ -136,6 +140,10 @@ https://www.gnu.org/licenses/gpl.html\n"
 #define CSYS_LOCAL_SOCK  "/queue/ossec/csyslog"
 #define MON_LOCAL_SOCK  "/queue/ossec/monitor"
 #define CLUSTER_SOCK "/queue/cluster/c-internal.sock"
+#define CONTROL_SOCK "/queue/ossec/control"
+
+// Attempts to check sockets availability
+#define SOCK_ATTEMPTS   10
 
 // Database socket
 #define WDB_LOCAL_SOCK "/queue/db/wdb"
@@ -145,6 +153,9 @@ https://www.gnu.org/licenses/gpl.html\n"
 
 #define WM_DOWNLOAD_SOCK "/queue/ossec/download"
 #define WM_DOWNLOAD_SOCK_PATH DEFAULTDIR WM_DOWNLOAD_SOCK
+
+#define WM_KEY_REQUEST_SOCK "/queue/ossec/krequest"
+#define WM_KEY_REQUEST_SOCK_PATH DEFAULTDIR WM_KEY_REQUEST_SOCK
 
 /* Active Response files */
 #define DEFAULTAR_FILE  "ar.conf"
@@ -166,15 +177,24 @@ https://www.gnu.org/licenses/gpl.html\n"
 /* Exec queue */
 #define EXECQUEUE       "/queue/alerts/execq"
 
+/* Security configuration assessment module queue */
+#define CFGAQUEUE       "/queue/alerts/cfgaq"
+
+/* Security configuration assessment remoted queue */
+#define CFGARQUEUE       "/queue/alerts/cfgarq"
+
+/* Exec queue api*/
+#define EXECQUEUEA      "/queue/alerts/execa"
+
 /* Active Response queue */
 #define ARQUEUE         "/queue/alerts/ar"
 
 /* Decoder file */
-#define XML_DECODER     "/etc/decoder.xml"
-#define XML_LDECODER    "/etc/local_decoder.xml"
+#define XML_LDECODER    "etc/decoders/local_decoder.xml"
 
 /* Agent information location */
 #define AGENTINFO_DIR    "/queue/agent-info"
+#define AGENTINFO_DIR_PATH DEFAULTDIR "/queue/agent-info"
 
 /* Agent groups location */
 #define GROUPS_DIR    "/queue/agent-groups"
@@ -206,6 +226,7 @@ https://www.gnu.org/licenses/gpl.html\n"
 #endif
 #define DIFF_NEW_FILE  "new-entry"
 #define DIFF_LAST_FILE "last-entry"
+#define DIFF_GZ_FILE "last-entry.gz"
 #define DIFF_TEST_HOST "__test"
 
 /* Syscheck data */
@@ -305,7 +326,6 @@ https://www.gnu.org/licenses/gpl.html\n"
 
 /* Multi-groups directory */
 #define MULTIGROUPS_DIR   "/var/multigroups"
-#define METADATA_FILE MULTIGROUPS_DIR "/.metadata"
 #define MAX_GROUP_NAME 255
 #define MULTIGROUP_SEPARATOR ','
 #define MAX_GROUPS_PER_MULTIGROUP 256
@@ -352,6 +372,9 @@ https://www.gnu.org/licenses/gpl.html\n"
 #define AGENTLESS_ENTRYDIRPATH  AGENTLESS_ENTRYDIR
 #endif
 #define EXECQUEUEPATH           DEFAULTDIR EXECQUEUE
+#define CFGASSESSMENTQUEUEPATH  DEFAULTDIR CFGAQUEUE
+
+#define EXECQUEUEPATHAPI        DEFAULTDIR EXECQUEUEA
 
 #ifdef WIN32
 #define SHAREDCFG_DIRPATH   SHAREDCFG_DIR
@@ -380,6 +403,10 @@ https://www.gnu.org/licenses/gpl.html\n"
 
 #ifndef DEFAULT_SYSLOG
 #define DEFAULT_SYSLOG 514 /* Default syslog port - udp */
+#endif
+
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
 #endif
 
 /* XML global elements */
@@ -429,4 +456,16 @@ https://www.gnu.org/licenses/gpl.html\n"
 
 #define CLOCK_LENGTH 256
 
-#endif /* __OS_HEADERS */
+#define SECURITY_CONFIGURATION_ASSESSMENT_DIR   "/ruleset/sca"
+
+#define SECURITY_CONFIGURATION_ASSESSMENT_DIR_WIN   "ruleset\\sca"
+
+#ifdef WIN32
+#define FTELL_TT "%lld"
+#define FTELL_INT64 (int64_t)
+#else
+#define FTELL_TT "%ld"
+#define FTELL_INT64 (long)
+#endif
+
+#endif /* OS_HEADERS */

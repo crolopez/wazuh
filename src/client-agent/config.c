@@ -1,7 +1,8 @@
-/* Copyright (C) 2009 Trend Micro Inc.
+/* Copyright (C) 2015-2019, Wazuh Inc.
+ * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation
@@ -22,9 +23,6 @@ int remote_conf;
 int min_eps;
 int rotate_log;
 int agent_debug_level;
-unsigned int _s_comp_print;
-unsigned int _s_recv_flush;
-int _s_verify_counter;
 
 /* Read the config file (for the remote client) */
 int ClientConf(const char *cfgfile)
@@ -35,6 +33,7 @@ int ClientConf(const char *cfgfile)
     agt->lip = NULL;
     agt->rip_id = 0;
     agt->execdq = 0;
+    agt->cfgadq = -1;
     agt->profile = NULL;
     agt->buffer = 1;
     agt->buflength = 5000;
@@ -92,7 +91,7 @@ cJSON *getClientConfig(void) {
             cJSON *server = cJSON_CreateObject();
             cJSON_AddStringToObject(server,"address",agt->server[i].rip);
             cJSON_AddNumberToObject(server,"port",agt->server[i].port);
-            if (agt->server[i].protocol == UDP_PROTO) cJSON_AddStringToObject(server,"protocol","udp"); else cJSON_AddStringToObject(server,"protocol","tcp");
+            if (agt->server[i].protocol == IPPROTO_UDP) cJSON_AddStringToObject(server,"protocol","udp"); else cJSON_AddStringToObject(server,"protocol","tcp");
             cJSON_AddItemToArray(servers,server);
         }
         cJSON_AddItemToObject(client,"server",servers);
@@ -127,17 +126,21 @@ cJSON *getLabelsConfig(void) {
         return NULL;
     }
 
-    unsigned int i;
     cJSON *root = cJSON_CreateObject();
-    cJSON *labels = cJSON_CreateObject();
+    cJSON *labels = cJSON_CreateArray();
 
     if (agt->labels) {
-        for (i=0;agt->labels[i].key;i++) {
-            cJSON_AddStringToObject(labels,agt->labels[i].key,agt->labels[i].value);
+        unsigned int i;
+        for (i=0; agt->labels[i].key; i++) {
+            cJSON *label = cJSON_CreateObject();
+            cJSON_AddStringToObject(label, "value", agt->labels[i].value);
+            cJSON_AddStringToObject(label, "key", agt->labels[i].key);
+            cJSON_AddStringToObject(label, "hidden", agt->labels[i].flags.hidden ? "yes" : "no");
+            cJSON_AddItemToObject(labels, "", label);
         }
     }
-
-    cJSON_AddItemToObject(root,"labels",labels);
+    
+    cJSON_AddItemToObject(root, "labels", labels);
 
     return root;
 }
@@ -193,4 +196,34 @@ cJSON *getAgentInternalOptions(void) {
     cJSON_AddItemToObject(root,"internal",internals);
 
     return root;
+}
+
+
+void resolveHostname(char **hostname, int attempts) {
+
+    char *tmp_str;
+    char *f_ip;
+
+    if (OS_IsValidIP(*hostname, NULL) == 1) {
+        return;
+    }
+
+    tmp_str = strchr(*hostname, '/');
+    if (tmp_str) {
+        *tmp_str = '\0';
+    }
+
+    f_ip = OS_GetHost(*hostname, attempts);
+    if (f_ip) {
+        char ip_str[128] = {0};
+        snprintf(ip_str, 127, "%s/%s", *hostname, f_ip);
+        free(f_ip);
+        free(*hostname);
+        os_strdup(ip_str, *hostname);
+    } else {
+        char ip_str[128] = {0};
+        snprintf(ip_str, 127, "%s/", *hostname);
+        free(*hostname);
+        os_strdup(ip_str, *hostname);
+    }
 }

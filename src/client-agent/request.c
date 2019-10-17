@@ -1,8 +1,8 @@
 /* Remote request manager
- * Copyright (C) 2017 Wazuh Inc.
+ * Copyright (C) 2015-2019, Wazuh Inc.
  * June 2, 2017.
  *
- * This program is a free software; you can redistribute it
+ * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
  * License (version 2) as published by the FSF - Free Software
  * Foundation.
@@ -27,9 +27,9 @@ static req_node_t ** req_pool;
 static volatile int pool_i = 0;
 static volatile int pool_j = 0;
 
-static pthread_mutex_t mutex_table = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t mutex_pool = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t pool_available = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t mutex_table;
+static pthread_mutex_t mutex_pool;
+static pthread_cond_t pool_available;
 
 int request_pool;
 int rto_sec;
@@ -40,6 +40,12 @@ static OSHash * allowed_sockets;
 
 // Initialize request module
 void req_init() {
+    int success = 0;
+    char *socket_log = NULL;
+    char *socket_sys = NULL;
+    char *socket_wodle = NULL;
+    char *socket_agent = NULL;
+
     // Get values from internal options
 
     request_pool = getDefine_Int("remoted", "request_pool", 1, 4096);
@@ -47,25 +53,55 @@ void req_init() {
     rto_msec = getDefine_Int("remoted", "request_rto_msec", 0, 999);
     max_attempts = getDefine_Int("remoted", "max_attempts", 1, 16);
 
+    w_mutex_init(&mutex_table, NULL);
+    w_mutex_init(&mutex_pool, NULL);
+    w_cond_init(&pool_available, NULL);
+
     // Create hash table and request pool
 
     if (req_table = OSHash_Create(), !req_table) {
         merror_exit("At req_main(): OSHash_Create()");
     }
+    OSHash_SetFreeDataPointer(req_table, (void (*)(void *))req_free);
 
     os_calloc(request_pool, sizeof(req_node_t *), req_pool);
 
     // Create hash table allowed sockets
 
     if (allowed_sockets = OSHash_Create(), !allowed_sockets) {
-        merror_exit("At req_main(): OSHash_Create()");
+        merror("At req_main(): OSHash_Create()");
+        goto ret;
     }
 
-    OSHash_Add(allowed_sockets,SOCKET_LOGCOLLECTOR,strdup(SOCKET_LOGCOLLECTOR));
-    OSHash_Add(allowed_sockets,SOCKET_SYSCHECK,strdup(SOCKET_SYSCHECK));
-    OSHash_Add(allowed_sockets,SOCKET_WMODULES,strdup(SOCKET_WMODULES));
-    OSHash_Add(allowed_sockets,SOCKET_AGENT,strdup(SOCKET_AGENT));
+    socket_log = strdup(SOCKET_LOGCOLLECTOR);
+    socket_sys = strdup(SOCKET_SYSCHECK);
+    socket_wodle = strdup(SOCKET_WMODULES);
+    socket_agent = strdup(SOCKET_AGENT);
 
+    if (!socket_log || !socket_sys || !socket_wodle || !socket_agent) {
+        merror("At req_main(): failed to allocate socket strings");
+        goto ret;
+    }
+
+    if (OSHash_Add(allowed_sockets, SOCKET_LOGCOLLECTOR, socket_log) != 2 || OSHash_Add(allowed_sockets, SOCKET_SYSCHECK, socket_sys) != 2 || \
+    OSHash_Add(allowed_sockets, SOCKET_WMODULES, socket_wodle) != 2 || OSHash_Add(allowed_sockets, SOCKET_AGENT, socket_agent) != 2) {
+        merror("At req_main(): failed to add socket strings to hash list");
+        goto ret;
+    }
+
+    success = 1;
+
+ret:
+    if (!success) {
+        if (req_pool) free(req_pool);
+        if (allowed_sockets) OSHash_Free(allowed_sockets);
+        if (req_table) OSHash_Free(req_table);
+        if (socket_log) free(socket_log);
+        if (socket_sys) free(socket_sys);
+        if (socket_wodle) free(socket_wodle);
+        if (socket_agent) free(socket_agent);
+        exit(1);
+    }
 }
 
 // Push a request message into dispatching queue. Return 0 on success or -1 on error.
@@ -136,7 +172,7 @@ int req_push(char * buffer, size_t length) {
 
         // Send ACK, only in UDP mode
 
-        if (agt->server[agt->rip_id].protocol == UDP_PROTO) {
+        if (agt->server[agt->rip_id].protocol == IPPROTO_UDP) {
             mdebug2("req_push(): Sending ack (%s).", counter);
             // Example: #!-req 16 ack
             snprintf(response, REQ_RESPONSE_LENGTH, CONTROL_HEADER HC_REQUEST "%s ack", counter);
@@ -216,7 +252,6 @@ void * req_receiver(__attribute__((unused)) void * arg) {
         w_mutex_unlock(&mutex_pool);
 
         w_mutex_lock(&node->mutex);
-
 #ifdef WIN32
         // In Windows, forward request to target socket
         if (strncmp(node->target, "agent", 5) == 0) {
@@ -229,15 +264,17 @@ void * req_receiver(__attribute__((unused)) void * arg) {
             length = syscom_dispatch(node->buffer, &buffer);
         } else if (strncmp(node->target, "wmodules", 8) == 0) {
             length = wmcom_dispatch(node->buffer, &buffer);
+        } else {
+            os_strdup("err Could not get requested section", buffer);
+            length = strlen(buffer);
         }
 #else
-        os_calloc(OS_MAXSTR, sizeof(char), buffer);
         // In Unix, forward request to target socket
         if (strncmp(node->target, "agent", 5) == 0) {
             length = agcom_dispatch(node->buffer, &buffer);
         }
         else {
-
+            os_calloc(OS_MAXSTR, sizeof(char), buffer);
             mdebug2("req_receiver(): sending '%s' to socket", node->buffer);
 
             // Send data
@@ -275,7 +312,6 @@ void * req_receiver(__attribute__((unused)) void * arg) {
         }
 
 #endif
-
         if (length <= 0) {
             // Build error string
             strcpy(buffer,"err Disconnected");
@@ -307,7 +343,7 @@ void * req_receiver(__attribute__((unused)) void * arg) {
 
             // Wait for ACK, only in UDP mode
 
-            if (agt->server[agt->rip_id].protocol == UDP_PROTO) {
+            if (agt->server[agt->rip_id].protocol == IPPROTO_UDP) {
                 gettimeofday(&now, NULL);
                 nsec = now.tv_usec * 1000 + rto_msec * 1000000;
                 timeout.tv_sec = now.tv_sec + rto_sec + nsec / 1000000000;
@@ -336,9 +372,10 @@ void * req_receiver(__attribute__((unused)) void * arg) {
         w_mutex_unlock(&mutex_table);
 
         // Delete node
-        free(buffer);
+        os_free(buffer);
         req_free(node);
     }
+
 
     return NULL;
 }
